@@ -1,8 +1,10 @@
-# Hilol Discord Bot
+# Hilol Discord Bot - Made wit <3 by Seekehr
 
 A TypeScript chatbot for your Discord server, powered by Groq. It answers mentions and replies, and responds immediately to new messages in a chosen channel when ready, with a random 10–15 minute cooldown between automatic replies. It won't ping anyone.
 
 Includes editable personality, per-user rate limits, timed ignores, and interactive setup. Built for one server per bot instance.
+
+<img src="preview.png" width="700">
 
 ## Setup
 
