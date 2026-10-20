@@ -1,197 +1,60 @@
 # Hilol Discord Bot
 
-A TypeScript Discord companion powered by Groq, intended for **one bot process and one Discord server**. No database, web server, or tenant system is required.
+A TypeScript chatbot for your Discord server, powered by Groq. It answers mentions and replies, and joins conversations in a chosen channel after a random 5–10 minute delay. It won't ping anyone.
 
-- Immediate responses to direct mentions and replies to the bot.
-- Automatic responses in one selected channel after a random 5–10 minute delay.
-- No outgoing mention notifications, including generated user/role mentions and reply notifications.
-- Persistent timed ignores, per-user limits, API budgets, bounded context, timeouts, and retries.
-- Interactive Discord setup, administrator commands, and validated JSON configuration.
-- Docker Compose and systemd deployment, including ARM64 Oracle VMs.
+Includes editable personality, per-user rate limits, timed ignores, and interactive setup. Built for one server per bot instance.
 
-## Quick start
+## Setup
 
-Install **Node.js 24 LTS** and Git. From the repository directory:
+You'll need Node.js 24, a Discord bot token, and a [Groq API key](https://console.groq.com/keys).
+
+1. Copy `.env.example` to `.env` and fill in your tokens, application ID, and server ID.
+2. In the [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent**. Invite the bot with the `bot` and `applications.commands` scopes.
+3. Give it **View Channels**, **Send Messages**, and **Read Message History**. Add **Send Messages in Threads** if needed.
 
 ```sh
 npm ci
-```
-
-Copy `.env.example` to `.env` (`Copy-Item .env.example .env` in PowerShell, or `cp .env.example .env` on Linux). Fill in:
-
-| Variable            | Value                                                          |
-| ------------------- | -------------------------------------------------------------- |
-| `DISCORD_TOKEN`     | Bot token from the Discord Developer Portal → Bot              |
-| `DISCORD_CLIENT_ID` | Application ID from General Information                        |
-| `DISCORD_GUILD_ID`  | Your server ID; enable Discord Developer Mode to copy it       |
-| `GROQ_API_KEY`      | API key from the [Groq Console](https://console.groq.com/keys) |
-
-In the [Discord Developer Portal](https://discord.com/developers/applications):
-
-1. Create an application and its bot. Enable **Message Content Intent** under Bot → Privileged Gateway Intents. See [Discord's intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
-2. Install it to your server with the `bot` and `applications.commands` OAuth2 scopes.
-3. Grant **View Channels**, **Send Messages**, **Read Message History**, and **Send Messages in Threads** if needed. The bot does not need Administrator, Manage Server, or Manage Messages. People changing settings need **Manage Server**.
-4. Check channel overrides and access to private channels/threads you want it to use.
-
-```sh
 npm run config:check
 npm run commands:register
 npm run build
 npm start
 ```
 
-Run `/setup` in Discord. Select an automatic reply channel, then edit personality and timing. Selecting a channel enables automatic replies. Before that, mentions and replies work, but automatic replies are off. Use `npm run dev` for local development; do not run it alongside production.
-
-Command registration is separate and scoped to your server. Repeat it when slash command definitions change. Ordinary configuration changes do not require registration. Registration replaces this application's command set in the configured guild.
+Run `/setup` in Discord to choose a channel, personality, and timing. Automatic replies stay off until you select a channel.
 
 ## Commands
 
-All command responses and setup controls are ephemeral. Administrator operations check the caller's current **Manage Server** permission, including buttons and modal submissions.
+| Command                                         | What it does                                    |
+| ----------------------------------------------- | ----------------------------------------------- |
+| `/setup`                                        | Open the setup panel                            |
+| `/personality`                                  | Edit the bot's personality                      |
+| `/config show`, `/config set`, `/config reload` | View, change, or reload settings                |
+| `/ignore user:@someone time:2h`                 | Ignore someone's messages and pings temporarily |
+| `/unignore user:@someone`                       | Remove an ignore                                |
+| `/forget`                                       | Clear this channel's bot context                |
+| `/status`, `/help`                              | Check usage or get help                         |
 
-| Command                                  | Purpose                                                                      |
-| ---------------------------------------- | ---------------------------------------------------------------------------- |
-| `/setup`                                 | Channel selector, personality/timing editor, auto-reply toggle, pause/resume |
-| `/personality`                           | Edit personality in a multiline modal                                        |
-| `/config show`                           | Download the current JSON configuration; excludes environment secrets        |
-| `/config set path:<field> value:<value>` | Change any setting, validating the whole configuration                       |
-| `/config reload`                         | Validate and reload the local config file                                    |
-| `/ignore user:@someone time:2h`          | Ignore messages and mentions until expiry; survives restarts                 |
-| `/unignore user:@someone`                | Remove an ignore early                                                       |
-| `/forget`                                | Clear this channel's in-memory context and pending auto reply                |
-| `/status`                                | Gateway latency, local rolling budget, ignore count, pending timers          |
-| `/help`                                  | Usage instructions                                                           |
+Changing settings requires **Manage Server**. Ignore durations accept `s`, `m`, `h`, or `d`, up to `365d`.
 
-`/status` and `/help` are available to everyone; other commands require Manage Server. Ignore durations accept integer `s`, `m`, `h`, and `d` units, from `1s` through `365d`. Ignored users can still use slash commands; ignores control chat responses. DMs, webhooks, bot authors, system messages, and other servers are skipped.
+Settings live in `config/bot.json`; see the [example](config/bot.example.json). Commands save to that same file. After manual edits, use `/config reload`. Secrets, local settings, and runtime data are gitignored.
 
-Examples (enter the named options in Discord):
+## Groq limits
 
-```text
-/config set path:personality value:You are a calm, witty astronomy enthusiast. Keep replies short.
-/config set path:ai.model value:openai/gpt-oss-20b
-/config set path:rateLimits.userRequests value:3
-/config set path:triggers.mentions value:false
-/config set path:triggers.directChannelIds value:["123456789012345678"]
-/config set path:enabled value:false
-/ignore user:@someone time:30m
-```
+The default model is `openai/gpt-oss-20b`. As of October 21, 2026, its published free limits are **30 requests/minute, 1,000/day, 8,000 tokens/minute, and 200,000/day**. The bot uses smaller, configurable budgets and respects provider cooldowns. [Check Groq's current limits](https://console.groq.com/docs/rate-limits).
 
-Values accept plain text or valid JSON: numbers, booleans, `null`, arrays, or objects. Quote strings that would otherwise parse as another type. Related fields can be changed together by setting their parent object with all its fields, such as `autoReply`. For a channel ID, pass a quoted snowflake string, not a JSON number: large Discord IDs lose precision as numbers.
+## Hosting
 
-## Configuration
-
-`CONFIG_PATH` defaults to `config/bot.json`. First startup or `npm run config:check` creates it with defaults. The tracked [example](config/bot.example.json) shows the full schema. `.env`, runtime settings, and `data/` are gitignored. If you customize paths, gitignore those too. Keep credentials out of the personality and JSON configuration.
-
-Commands update the **same JSON file** that you edit. Changes are validated, serialized, and saved by same-directory atomic rename before becoming live. File edits take effect after `/config reload` or restart. Configuration changes cancel pending/in-flight replies and clear old context. Invalid live changes leave active settings untouched. Missing files create defaults; malformed existing config/state prevents startup.
-
-Avoid editing files while issuing commands. Run only one instance against these files: the JSON store is not a cross-process lock. Back up config and state together. Atomic rename protects against partial writes on process failure, but is not a power-loss durability guarantee.
-
-| Group         | Defaults and behavior                                                                                                                                                          |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`     | Master switch, default `true`                                                                                                                                                  |
-| `personality` | System instructions, 1–4,000 characters                                                                                                                                        |
-| `triggers`    | Mentions/replies enabled. Empty direct allowlist means any accessible server channel. Exclusions take priority; parent rules apply to threads.                                 |
-| `autoReply`   | Disabled until configured; one channel; random `300–600` seconds; maximum message age `1800` seconds. Delays support 10 seconds–24 hours.                                      |
-| `ai`          | `openai/gpt-oss-20b`, temperature `0.7`, output budget `512` tokens, timeout `30000` ms, one transient retry, two concurrent requests                                          |
-| `context`     | 12 messages, 2,000 history characters, 1,200 characters of new input, one hour TTL, up to 100 channels                                                                         |
-| `rateLimits`  | 5 requests per user per 60 seconds, 5 seconds between requests; 25 API requests/minute, 900/day, 7,000 tokens/minute, 180,000/day; one error notice per channel per 30 seconds |
-
-Exact ranges and cross-field validation live in `src/config/schema.ts`. All schema fields are configurable with `/config set`. Environment variables are deployment settings, require restart, and cannot be changed through Discord. `LOG_LEVEL` defaults to `info`.
-
-## Automatic reply behavior
-
-The first eligible ordinary message opens a random delay window. Later ordinary messages replace the pending candidate **without extending the timer**. At expiry, the bot responds to the latest candidate with refreshed content. This gives a busy channel one automatic reply per window instead of queueing every message or waiting indefinitely for silence.
-
-A direct mention or reply to the bot gets an immediate response and cancels the channel's pending auto reply. New ordinary activity can open another window. The bot never starts a conversation without a user message, never replies to itself, and sends at most one Discord message per generation, capped below Discord's 2,000-character limit.
-
-At delivery, it rechecks enabled state, selected channel, exclusions, ignores, message age, current content, and permissions. Deleted messages are skipped. If the author is rate-limited or Groq is unavailable, auto replies are silently skipped; another message can start a new window. Timers are in memory and discarded on restart/config changes. Ignore expiry and API reservations persist.
-
-## Groq free tier and budgets
-
-Checked **October 21, 2026** against the [official Groq rate-limit page](https://console.groq.com/docs/rate-limits). Published free-plan limits for default model `openai/gpt-oss-20b`:
-
-| Requests/minute | Requests/day | Tokens/minute | Tokens/day |
-| --------------- | ------------ | ------------- | ---------- |
-| 30              | 1,000        | 8,000         | 200,000    |
-
-Limits apply to the **Groq organization**, including other applications sharing it. Your [account Limits page](https://console.groq.com/settings/limits) is authoritative; availability and quotas can change. Check the [supported models](https://console.groq.com/docs/models) before changing `ai.model`. An eligible free account needs no billing upgrade, and this code never enables one.
-
-Local defaults sit below those published limits. Each HTTP attempt reserves a request and a conservative token allowance **before sending**, including retries. Reservations persist over a rolling 24-hour period. Token estimates use UTF-8 prompt bytes plus output budget and overhead: this is conservative, **not an exact model tokenizer or account usage report**. Failed attempts retain reservations. Large personalities/history can exhaust the minute budget in a single request; reduce context/output before raising budgets.
-
-Groq remains authoritative if token counting or shared usage differs. A `429` honors `Retry-After` (seconds or HTTP date), persists a cooldown, and is not retried immediately. Timeouts, network failures, and `5xx` responses get bounded exponential-backoff retries, each reserved locally. Credential, model/request, and empty-response errors produce actionable errors without provider response bodies or keys. The output budget includes reasoning; if replies are repeatedly empty, raise `ai.maxOutputTokens` and review budgets. GPT-OSS uses low reasoning effort.
-
-There is no unbounded queue. One generation per channel and a global concurrency cap prevent backlog. Per-user counters reset on restart; persistent provider budgets still protect API usage. Direct error notices are throttled per channel.
-
-## Context and privacy
-
-Only messages the bot answers and its responses enter temporary context. It does not fetch a channel backlog. Context is shared with later participants **in that same channel**, never across channels; threads have separate context. It expires by TTL, has message/character/channel limits, and disappears on restart. Ignoring someone removes their cached exchanges and pending reply, and stops in-flight requests that might include their messages. `/forget` clears cached context, not Discord messages or data already sent to Groq.
-
-Long input is truncated. Attachments, image contents, links, and arbitrary reply chains are not retrieved or analyzed. Direct reply detection fetches the referenced message to verify bot authorship. Replies still trigger after restart, but old conversational context is gone.
-
-Message text, display names, relevant cached conversation, and personality are sent to Groq. Operational logs omit messages, prompts, credentials, and upstream response bodies. The model has no tools or access to the environment/filesystem. System instructions are not a security boundary for sensitive information: keep secrets out of prompts.
-
-## Architecture
-
-```text
-src/
-  index.ts                Composition root, Discord lifecycle, shutdown
-  config/                 Validated settings, environment, transactional config store
-  core/                   Scheduling, user limits, context, duration parsing, routing policy
-  ai/                     Provider interface and Groq HTTP adapter
-  discord/                Commands, setup UI, interactions, message adapter
-  storage/                Atomic JSON, persistent ignores and API reservations
-tests/                    Core, persistence, provider, Discord adapter tests
-deploy/hilol.service       Optional Linux service
-```
-
-Discord events delegate to services. The AI adapter implements `ChatProvider`. Configuration and state have separate responsibilities. Core scheduling/context code do not depend on Discord or Groq. No additional service or framework is required.
-
-## Docker / Oracle Cloud deployment
-
-Use an Ubuntu/Debian VM with Docker Engine and the Compose plugin. The Node base image supports x86-64 and ARM64, including Oracle Ampere VMs. At least 1 GB RAM is a practical starting point; builds need more memory than the running bot. Cloud free-tier eligibility and capacity depend on your provider/account.
-
-1. Clone the repository and create `.env` as described above.
-2. Make host `config/` writable by container UID `1000`. On Linux, in a dedicated checkout, use `sudo chown -R 1000:1000 config`. Optionally copy `config/bot.example.json` to `config/bot.json`; otherwise defaults are created.
-3. Start the service:
+On an Oracle Cloud VM or another Linux host with Docker, create `.env` as above, then run:
 
 ```sh
+sudo chown -R 1000:1000 config
 docker compose build
 docker compose run --rm bot node dist/register-commands.js
 docker compose up -d
-docker compose logs -f bot
 ```
 
-Use `/setup` in Discord. Settings remain in host `config/bot.json`; state uses the named volume `bot-state`. Compose explicitly sets container paths. Keep backups of config and the state volume. `docker compose down -v` erases state. After updates, use `docker compose up -d --build`, and register commands again if definitions changed.
+No inbound ports are needed. Settings stay in `config/`; ignore timers and API budgets persist in a Docker volume. Run one instance at a time. A [systemd service](deploy/hilol.service) is also included; it expects `/opt/hilol`, a `hilol` user, and writable `config/` and `data/` directories.
 
-The container has a non-root user, read-only root filesystem, writable config/state mounts, rotated logs, and a restart policy. No inbound application ports are required: allow outbound HTTPS/WebSocket connections and DNS. Protect SSH through your cloud firewall. `.env` is excluded from the build context; credentials are never baked into the image.
+Conversation context stays in memory per channel and is sent to Groq when generating replies. Restarts clear context and pending replies; ignores and API budgets survive.
 
-### Alternative: systemd without Docker
-
-1. Install Node.js 24, create a dedicated `hilol` system user, and place the repository at `/opt/hilol`. Check `command -v node` and adjust the service's `ExecStart` if needed.
-2. Run `npm ci`, create/fill `.env`, then run `npm run config:check`, `npm run commands:register`, and `npm run build` as the deployment owner.
-3. Create `/opt/hilol/data`; give `hilol` write access to `config/` and `data/`, and read access to the application and `.env`. Restrict `.env` (for example owner `hilol`, mode `600`). Use the default relative config/state paths.
-4. Copy `deploy/hilol.service` to `/etc/systemd/system/hilol.service` and run:
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now hilol
-sudo journalctl -u hilol -f
-```
-
-The service assumes `/opt/hilol`, user/group `hilol`, `/usr/bin/node`, and existing writable `config`/`data` directories. Adjust these together for your layout. Never run Docker and systemd with the same bot token at once.
-
-## Development and verification
-
-```sh
-npm run check
-```
-
-This checks strict TypeScript including tests, runs behavior tests, checks formatting, and builds production JavaScript. GitHub Actions runs the same command without credentials. Tests use mocked Discord/Groq transports; no live API calls occur.
-
-Troubleshooting:
-
-- **Connected but ignores messages:** check Message Content Intent, channel permissions, enabled state, exclusions, and automatic reply settings.
-- **Commands missing:** verify IDs and scopes, then rerun `npm run commands:register`.
-- **Invalid config:** run `npm run config:check`; use `/setup` or set related fields together. Auto replies need a channel.
-- **Limits hit early:** inspect `/status` and Groq account limits. Context, reasoning, retries, and other clients consume allowances.
-- **Container cannot save settings:** check UID `1000` host permissions. Mount the config directory rather than a single file, since saves use rename.
-- **Startup fails after an edit:** validate config JSON and restore malformed state from backup.
+For development, use `npm run dev`. Run `npm run check` to check types, tests, formatting, and the build.
