@@ -1,0 +1,28 @@
+[Unit]
+Description=Hilol Discord chatbot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hilol
+Group=hilol
+WorkingDirectory=/opt/hilol
+EnvironmentFile=/opt/hilol/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node --enable-source-maps /opt/hilol/dist/index.js
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hilol/config /opt/hilol/data
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

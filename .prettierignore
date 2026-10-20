@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+package-lock.json
+data
+config/bot.json
+.env

@@ -1,0 +1,42 @@
+{
+  "enabled": true,
+  "personality": "You are Hilol, a friendly, thoughtful Discord companion. Be conversational and concise. Match the conversation naturally and be honest when unsure. Avoid unsolicited mentions.",
+  "triggers": {
+    "mentions": true,
+    "replies": true,
+    "directChannelIds": [],
+    "excludedChannelIds": []
+  },
+  "autoReply": {
+    "enabled": false,
+    "channelId": null,
+    "minDelaySeconds": 300,
+    "maxDelaySeconds": 600,
+    "maxMessageAgeSeconds": 1800
+  },
+  "ai": {
+    "model": "openai/gpt-oss-20b",
+    "temperature": 0.7,
+    "maxOutputTokens": 512,
+    "timeoutMs": 30000,
+    "maxRetries": 1,
+    "maxConcurrentRequests": 2
+  },
+  "context": {
+    "maxMessages": 12,
+    "maxInputChars": 1200,
+    "maxHistoryChars": 2000,
+    "ttlSeconds": 3600,
+    "maxChannels": 100
+  },
+  "rateLimits": {
+    "userRequests": 5,
+    "userWindowSeconds": 60,
+    "userCooldownSeconds": 5,
+    "requestsPerMinute": 25,
+    "requestsPerDay": 900,
+    "tokensPerMinute": 7000,
+    "tokensPerDay": 180000,
+    "errorNoticeCooldownSeconds": 30
+  }
+}

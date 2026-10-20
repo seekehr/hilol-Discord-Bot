@@ -1,0 +1,54 @@
+import { describe, it, expect } from 'vitest';
+import { readFile, writeFile } from 'node:fs/promises';
+import { ConfigStore } from '../src/config/store.js';
+import { defaultConfig } from '../src/config/schema.js';
+import { temporaryPath } from './helpers.js';
+
+describe('configuration transactions', () => {
+  it('keeps the tracked example aligned with validated defaults', async () => {
+    expect(
+      JSON.parse(await readFile(new URL('../config/bot.example.json', import.meta.url), 'utf8')),
+    ).toEqual(defaultConfig);
+  });
+  it('creates defaults, saves concurrent changes, and reloads them', async () => {
+    const path = await temporaryPath('bot.json');
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(store.current).toEqual(defaultConfig);
+    await Promise.all([store.set('ai.model', 'test-model'), store.set('personality', 'Friendly')]);
+    const restored = new ConfigStore(path);
+    await restored.load();
+    expect(restored.current.ai.model).toBe('test-model');
+    expect(restored.current.personality).toBe('Friendly');
+  });
+
+  it('rejects invalid settings without changing disk or live configuration', async () => {
+    const path = await temporaryPath();
+    const store = new ConfigStore(path);
+    await store.load();
+    const before = await readFile(path, 'utf8');
+    await expect(store.set('autoReply.minDelaySeconds', 700)).rejects.toThrow('Minimum delay');
+    await expect(store.set('autoReply.enabled', true)).rejects.toThrow('Select a channel');
+    await expect(store.set('ai.temperature', 'hot')).rejects.toThrow('Invalid configuration');
+    await expect(store.set('__proto__.polluted', true)).rejects.toThrow('Invalid setting path');
+    await expect(store.set('ai.typo', 'x')).rejects.toThrow('Unknown setting');
+    expect(await readFile(path, 'utf8')).toBe(before);
+    expect(store.current).toEqual(defaultConfig);
+  });
+
+  it('keeps the live config when a malformed reload fails', async () => {
+    const path = await temporaryPath();
+    const store = new ConfigStore(path);
+    await store.load();
+    await writeFile(path, '{');
+    await expect(store.load()).rejects.toThrow();
+    expect(store.current).toEqual(defaultConfig);
+  });
+
+  it('returns snapshots that cannot mutate live settings', async () => {
+    const store = new ConfigStore(await temporaryPath());
+    await store.load();
+    store.current.triggers.excludedChannelIds.push('123456789012345678');
+    expect(store.current.triggers.excludedChannelIds).toEqual([]);
+  });
+});
