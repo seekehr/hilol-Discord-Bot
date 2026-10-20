@@ -15,7 +15,11 @@ export const configSchema = z
   .strictObject({
     ownerIds: z.array(id).max(100).default([]),
     enabled: z.boolean(),
-    personality: z.string().trim().min(1).max(4_000),
+    promptFile: z
+      .string()
+      .trim()
+      .max(260)
+      .regex(/^[\w.-]+\.txt$/i, 'Use a .txt filename inside the config directory'),
     triggers: z.strictObject({
       mentions: z.boolean(),
       replies: z.boolean(),
@@ -79,8 +83,7 @@ export type BotConfig = z.infer<typeof configSchema>;
 export const defaultConfig: BotConfig = {
   ownerIds: [],
   enabled: true,
-  personality:
-    'You are Hilol, a friendly, thoughtful Discord companion. Be conversational and concise. Match the conversation naturally and be honest when unsure. Avoid unsolicited mentions.',
+  promptFile: 'prompt.txt',
   triggers: { mentions: true, replies: true, directChannelIds: [], excludedChannelIds: [] },
   autoReply: {
     enabled: false,

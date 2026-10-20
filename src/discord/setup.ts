@@ -41,7 +41,7 @@ export function setupPanel(config: BotConfig) {
   };
 }
 
-export function personalityModal(config: BotConfig, setup = false): ModalBuilder {
+export function personalityModal(config: BotConfig, prompt: string, setup = false): ModalBuilder {
   const modal = new ModalBuilder()
     .setCustomId(setup ? 'setup:save' : 'personality:save')
     .setTitle(setup ? 'Personality and timing' : 'Bot personality');
@@ -53,7 +53,7 @@ export function personalityModal(config: BotConfig, setup = false): ModalBuilder
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
         .setMaxLength(4_000)
-        .setValue(config.personality),
+        .setValue(prompt),
     ),
   );
   if (setup) {

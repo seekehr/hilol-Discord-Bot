@@ -51,6 +51,8 @@ Every command and setup control is restricted to `ownerIds`, including `/help` a
 
 Settings live in `config/bot.json`; see the [example](config/bot.example.json). Commands save to that same file. After manual edits, use `/config reload`. Secrets, local settings, and runtime data are gitignored.
 
+Personality lives in `config/prompt.txt`, selected by `"promptFile": "prompt.txt"` in the JSON. It is gitignored and created automatically; [prompt.example.txt](config/prompt.example.txt) shows the default. Edit the file or use `/personality`—changes apply to the next AI reply. Existing inline personality text is migrated automatically.
+
 Customize rate-limit replies in `rateLimits.messages`: `user`, `minute`, `day`, and `provider`. Text supports `{retryAfterSeconds}` and `{resource}`; an empty string silences that notice.
 
 Edit [config/preconfigured_message_responses.json](config/preconfigured_message_responses.json) for quick replies like `"hi": "hi love"`. Matching ignores the bot mention, case, whitespace, and trailing punctuation. Whole-phrase matches skip Groq; other messages use AI. Changes take effect on the next message. Normal channel rules, ignores, user limits, and auto cooldowns still apply. This file is tracked in Git.

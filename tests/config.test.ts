@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { ConfigStore } from '../src/config/store.js';
 import { defaultConfig } from '../src/config/schema.js';
 import { temporaryPath } from './helpers.js';
+import { dirname, join } from 'node:path';
 
 describe('configuration transactions', () => {
   it('keeps the tracked example aligned with validated defaults', async () => {
@@ -15,11 +16,11 @@ describe('configuration transactions', () => {
     const store = new ConfigStore(path);
     await store.load();
     expect(store.current).toEqual(defaultConfig);
-    await Promise.all([store.set('ai.model', 'test-model'), store.set('personality', 'Friendly')]);
+    await Promise.all([store.set('ai.model', 'test-model'), store.update(() => {}, 'Friendly')]);
     const restored = new ConfigStore(path);
     await restored.load();
     expect(restored.current.ai.model).toBe('test-model');
-    expect(restored.current.personality).toBe('Friendly');
+    expect(await restored.readPrompt()).toBe('Friendly');
   });
 
   it('rejects invalid settings without changing disk or live configuration', async () => {
@@ -35,6 +36,9 @@ describe('configuration transactions', () => {
     );
     await expect(store.set('autoReply.enabled', true)).rejects.toThrow('Select a channel');
     await expect(store.set('ai.temperature', 'hot')).rejects.toThrow('Invalid configuration');
+    await expect(store.set('promptFile', '../private.txt')).rejects.toThrow(
+      'Invalid configuration',
+    );
     await expect(store.set('ownerIds', ['not-a-discord-id'])).rejects.toThrow(
       'Invalid configuration',
     );
@@ -79,7 +83,7 @@ describe('configuration transactions', () => {
     await writeFile(path, JSON.stringify(legacy));
     const store = new ConfigStore(path);
     await store.load();
-    expect(store.current.personality).toBe('Keep my personality');
+    expect(await store.readPrompt()).toBe('Keep my personality');
     expect(store.current.autoReply).toEqual({
       enabled: true,
       channelId: '123456789012345678',
@@ -93,12 +97,11 @@ describe('configuration transactions', () => {
   it('adds an empty owner allowlist to existing files without changing other settings', async () => {
     const path = await temporaryPath();
     const { ownerIds: _owners, ...legacy } = structuredClone(defaultConfig);
-    legacy.personality = 'My custom personality';
-    await writeFile(path, JSON.stringify(legacy));
+    await writeFile(path, JSON.stringify({ ...legacy, personality: 'My custom personality' }));
     const store = new ConfigStore(path);
     await store.load();
     expect(store.current.ownerIds).toEqual([]);
-    expect(store.current.personality).toBe('My custom personality');
+    expect(await store.readPrompt()).toBe('My custom personality');
     expect(JSON.parse(await readFile(path, 'utf8')).ownerIds).toEqual([]);
   });
 
@@ -116,5 +119,51 @@ describe('configuration transactions', () => {
     expect(JSON.parse(await readFile(path, 'utf8')).rateLimits.messages.minute).toBe(
       'wait {retryAfterSeconds}s',
     );
+  });
+
+  it('moves a legacy inline prompt into a sibling text file and removes it from JSON', async () => {
+    const path = await temporaryPath('bot.json');
+    const { promptFile: _file, ...legacy } = structuredClone(defaultConfig);
+    const prompt = 'My private personality\nwith several lines.';
+    await writeFile(path, JSON.stringify({ ...legacy, personality: prompt }));
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(await readFile(join(dirname(path), 'prompt.txt'), 'utf8')).toBe(`${prompt}\n`);
+    expect(await store.readPrompt()).toBe(prompt);
+    const disk = JSON.parse(await readFile(path, 'utf8'));
+    expect(disk.promptFile).toBe('prompt.txt');
+    expect(disk).not.toHaveProperty('personality');
+    expect(JSON.stringify(store.current)).not.toContain(prompt);
+  });
+
+  it('preserves an existing prompt file during migration and reads later manual edits', async () => {
+    const path = await temporaryPath('bot.json');
+    const promptPath = join(dirname(path), 'prompt.txt');
+    await writeFile(promptPath, 'Keep this existing prompt');
+    await writeFile(path, JSON.stringify({ ...defaultConfig, personality: 'Old JSON prompt' }));
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(await store.readPrompt()).toBe('Keep this existing prompt');
+    await writeFile(promptPath, 'An edited prompt');
+    expect(await store.readPrompt()).toBe('An edited prompt');
+  });
+
+  it('validates prompt and settings together before saving either file', async () => {
+    const path = await temporaryPath('bot.json');
+    const store = new ConfigStore(path);
+    await store.load();
+    const original = await store.readPrompt();
+    await expect(
+      store.update((draft) => {
+        draft.enabled = false;
+      }, ' '),
+    ).rejects.toThrow('1–4000');
+    await expect(
+      store.update((draft) => {
+        draft.autoReply.minIntervalSeconds = 1000;
+      }, 'New prompt'),
+    ).rejects.toThrow('Minimum interval');
+    expect(await store.readPrompt()).toBe(original);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(defaultConfig);
   });
 });

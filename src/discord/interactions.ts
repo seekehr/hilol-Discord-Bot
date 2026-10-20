@@ -42,7 +42,9 @@ export class InteractionService {
       if (interaction.isChatInputCommand()) {
         const command = interaction.commandName;
         if (command === 'personality') {
-          await interaction.showModal(personalityModal(this.config.current));
+          await interaction.showModal(
+            personalityModal(this.config.current, await this.config.readPrompt()),
+          );
           return;
         }
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -58,7 +60,7 @@ export class InteractionService {
               ).setName('bot-config.json');
               await interaction.editReply({
                 content:
-                  'Current configuration (contains the personality; keep it private if needed). Secrets are stored separately in the environment.',
+                  'Current configuration. The personality prompt is stored separately in promptFile; secrets are in the environment.',
                 files: [file],
               });
               return;
@@ -124,7 +126,9 @@ export class InteractionService {
 
       if (interaction.isButton()) {
         if (interaction.customId === 'setup:edit') {
-          await interaction.showModal(personalityModal(this.config.current, true));
+          await interaction.showModal(
+            personalityModal(this.config.current, await this.config.readPrompt(), true),
+          );
           return;
         }
         if (!['setup:toggle-auto', 'setup:toggle-bot'].includes(interaction.customId)) return;
@@ -176,7 +180,6 @@ export class InteractionService {
       ) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         await this.config.update((draft) => {
-          draft.personality = interaction.fields.getTextInputValue('personality');
           if (interaction.customId === 'setup:save') {
             draft.autoReply.minIntervalSeconds = Number(
               interaction.fields.getTextInputValue('min'),
@@ -185,7 +188,7 @@ export class InteractionService {
               interaction.fields.getTextInputValue('max'),
             );
           }
-        });
+        }, interaction.fields.getTextInputValue('personality'));
         this.messages.configurationChanged();
         await interaction.editReply({
           ...setupPanel(this.config.current),

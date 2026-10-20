@@ -8,12 +8,13 @@ import { temporaryPath } from './helpers.js';
 import { RateLimitError } from '../src/core/rate-limit-error.js';
 import { PreconfiguredResponses } from '../src/config/preconfigured-responses.js';
 import { writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 const guildId = '123456789012345678';
 const channelId = '223456789012345678';
 const userId = '323456789012345678';
 const botId = '423456789012345678';
-async function fixture(responses: Record<string, string> = {}) {
+async function fixture(responses: Record<string, string> = {}, messageNow = () => Date.now()) {
   const config = new ConfigStore(await temporaryPath('bot.json'));
   const state = new StateStore(await temporaryPath());
   await config.load();
@@ -62,12 +63,43 @@ async function fixture(responses: Record<string, string> = {}) {
     provider,
     pino({ level: 'silent' }),
     new PreconfiguredResponses(responsesPath),
+    messageNow,
   );
   return { service, config, state, provider, message, reply, fetchMessage };
 }
 afterEach(() => vi.useRealTimers());
 
 describe('Discord message routing', () => {
+  it('answers a fresh automatic message using Discord time when the host clock lags behind', async () => {
+    const serverNow = Date.now() + 68_000;
+    const f = await fixture({ test: 'a local reply' }, () => serverNow);
+    await f.config.update((c) => {
+      c.autoReply.enabled = true;
+      c.autoReply.channelId = channelId;
+    });
+    await f.service.handle({
+      ...f.message,
+      content: 'test',
+      mentions: { users: new Map() },
+      createdTimestamp: serverNow - 100,
+    } as unknown as Message);
+    expect(f.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'a local reply' }));
+    expect(f.provider.complete).not.toHaveBeenCalled();
+    f.service.stop();
+  });
+  it('uses prompt-file contents in AI requests and reads changes on the next reply', async () => {
+    const f = await fixture();
+    const promptPath = join(dirname(f.config.path), f.config.current.promptFile);
+    await writeFile(promptPath, 'My file-based personality');
+    await f.service.handle(f.message as unknown as Message);
+    expect(f.provider.complete.mock.calls[0]![0][0].content).toContain('My file-based personality');
+    await writeFile(promptPath, 'My updated file-based personality');
+    await f.service.handle(f.message as unknown as Message);
+    expect(f.provider.complete.mock.calls[1]![0][0].content).toContain(
+      'My updated file-based personality',
+    );
+    f.service.stop();
+  });
   it.each([
     [`<@${botId}> hi`, 'hi love'],
     [`HELLO! <@${botId}>`, 'hi love'],

@@ -9,6 +9,7 @@ import { commands } from '../src/discord/commands.js';
 import { setupPanel, personalityModal } from '../src/discord/setup.js';
 import { defaultConfig } from '../src/config/schema.js';
 import { temporaryPath } from './helpers.js';
+import { defaultPrompt } from '../src/config/prompt-file.js';
 
 const guildId = '123456789012345678';
 const userId = '223456789012345678';
@@ -150,7 +151,9 @@ describe('owner-only interactions', () => {
   it('validates all command and setup component payloads locally', () => {
     // Clear the old guild-permission gate when re-registering existing commands.
     for (const command of commands) expect(command.default_member_permissions).toBeNull();
-    expect(personalityModal(defaultConfig, true).toJSON().components).toHaveLength(3);
+    expect(personalityModal(defaultConfig, defaultPrompt, true).toJSON().components).toHaveLength(
+      3,
+    );
     for (const row of setupPanel(defaultConfig).components)
       expect(() => row.toJSON()).not.toThrow();
   });
@@ -209,5 +212,22 @@ describe('owner-only interactions', () => {
     await f.service.handle(interaction as unknown as Interaction);
     expect(interaction.showModal).toHaveBeenCalledOnce();
     expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it('saves the personality editor to the prompt file rather than embedding it in config', async () => {
+    const f = await fixture();
+    const interaction = {
+      ...command('personality', false),
+      isChatInputCommand: () => false,
+      isModalSubmit: () => true,
+      customId: 'personality:save',
+      fields: { getTextInputValue: () => 'A personality saved in Discord' },
+    };
+    await f.service.handle(interaction as unknown as Interaction);
+    expect(await f.config.readPrompt()).toBe('A personality saved in Discord');
+    expect(f.config.current).not.toHaveProperty('personality');
+    expect(f.config.current.promptFile).toBe('prompt.txt');
+    expect(f.messages.configurationChanged).toHaveBeenCalledOnce();
+    expect(interaction.editReply).toHaveBeenCalled();
   });
 });

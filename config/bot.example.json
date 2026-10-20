@@ -1,7 +1,7 @@
 {
   "ownerIds": [],
   "enabled": true,
-  "personality": "You are Hilol, a friendly, thoughtful Discord companion. Be conversational and concise. Match the conversation naturally and be honest when unsure. Avoid unsolicited mentions.",
+  "promptFile": "prompt.txt",
   "triggers": {
     "mentions": true,
     "replies": true,

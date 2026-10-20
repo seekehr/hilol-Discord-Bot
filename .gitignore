@@ -6,6 +6,8 @@ coverage/
 !.env.example
 config/*.json
 !config/*.example.json
+config/*.txt
+!config/*.example.txt
 data/
 *.log
 *.tmp

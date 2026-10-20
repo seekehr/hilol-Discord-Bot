@@ -27,6 +27,7 @@ export class MessageService {
     private readonly provider: ChatProvider,
     private readonly logger: Logger,
     private readonly responses = new PreconfiguredResponses(),
+    private readonly messageNow = Date.now,
   ) {}
 
   get autoReplyReadyInSeconds(): number {
@@ -38,6 +39,7 @@ export class MessageService {
     return isFreshAutoMessage(
       message.createdTimestamp,
       this.config.current.autoReply.maxMessageAgeSeconds,
+      this.messageNow(),
     );
   }
 
@@ -131,7 +133,7 @@ export class MessageService {
         if (!automatic && 'sendTyping' in message.channel)
           await message.channel.sendTyping().catch(() => undefined);
         output = await this.provider.complete(
-          buildPrompt(config, history, input),
+          buildPrompt(config, history, input, await this.config.readPrompt()),
           config,
           controller.signal,
         );

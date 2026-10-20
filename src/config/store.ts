@@ -1,6 +1,8 @@
 import { configSchema, defaultConfig, type BotConfig } from './schema.js';
 import { readJson, writeJson, SerialQueue } from '../storage/json-file.js';
 import { UserError } from '../core/errors.js';
+import { dirname, resolve } from 'node:path';
+import { ensurePrompt, readPrompt, savePrompt, validatePrompt } from './prompt-file.js';
 
 // Upgrade the former delayed-reply settings without touching unrelated settings.
 function migrateLegacyConfig(value: unknown): unknown {
@@ -39,6 +41,14 @@ export class ConfigStore {
     return structuredClone(this.value);
   }
 
+  private promptPath(config = this.value): string {
+    return resolve(dirname(this.path), config.promptFile);
+  }
+
+  readPrompt(): Promise<string> {
+    return readPrompt(this.promptPath());
+  }
+
   private validate(value: unknown): BotConfig {
     const result = configSchema.safeParse(value);
     if (!result.success) {
@@ -52,8 +62,20 @@ export class ConfigStore {
   async load(): Promise<void> {
     await this.queue.run(async () => {
       const disk = await readJson(this.path);
-      const migrated = migrateLegacyConfig(disk ?? defaultConfig);
+      let migrated = migrateLegacyConfig(disk ?? defaultConfig);
+      let legacyPrompt: string | undefined;
+      if (migrated && typeof migrated === 'object' && 'personality' in migrated) {
+        if (typeof migrated.personality !== 'string')
+          throw new UserError('Invalid legacy personality prompt.');
+        legacyPrompt = validatePrompt(migrated.personality);
+        const { personality: _personality, ...rest } = migrated;
+        migrated = {
+          ...rest,
+          promptFile: 'promptFile' in rest ? rest.promptFile : defaultConfig.promptFile,
+        };
+      }
       const next = this.validate(migrated);
+      await ensurePrompt(this.promptPath(next), legacyPrompt);
       if (
         disk === undefined ||
         migrated !== disk ||
@@ -65,11 +87,14 @@ export class ConfigStore {
     });
   }
 
-  update(change: (draft: BotConfig) => void): Promise<void> {
+  update(change: (draft: BotConfig) => void, promptText?: string): Promise<void> {
     return this.queue.run(async () => {
       const draft = this.current;
       change(draft);
       const next = this.validate(draft);
+      // Validate both inputs before touching either file. Each file is saved atomically.
+      if (promptText === undefined) await ensurePrompt(this.promptPath(next));
+      else await savePrompt(this.promptPath(next), promptText);
       await writeJson(this.path, next);
       this.value = next;
       this.revision++;

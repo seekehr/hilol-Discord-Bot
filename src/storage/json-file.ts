@@ -13,10 +13,14 @@ export async function readJson(path: string): Promise<unknown | undefined> {
 
 // Rename within the same directory prevents partially written JSON on process failure.
 export async function writeJson(path: string, value: unknown): Promise<void> {
+  await writeText(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function writeText(path: string, text: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(temp, text, { mode: 0o600 });
     await rename(temp, path);
   } finally {
     await unlink(temp).catch(() => undefined);
