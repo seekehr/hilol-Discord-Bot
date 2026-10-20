@@ -35,6 +35,12 @@ describe('configuration transactions', () => {
     );
     await expect(store.set('autoReply.enabled', true)).rejects.toThrow('Select a channel');
     await expect(store.set('ai.temperature', 'hot')).rejects.toThrow('Invalid configuration');
+    await expect(store.set('ownerIds', ['not-a-discord-id'])).rejects.toThrow(
+      'Invalid configuration',
+    );
+    await expect(store.set('ownerIds', [123456789012345678])).rejects.toThrow(
+      'Invalid configuration',
+    );
     await expect(store.set('__proto__.polluted', true)).rejects.toThrow('Invalid setting path');
     await expect(store.set('ai.typo', 'x')).rejects.toThrow('Unknown setting');
     expect(await readFile(path, 'utf8')).toBe(before);
@@ -82,5 +88,33 @@ describe('configuration transactions', () => {
       maxMessageAgeSeconds: 120,
     });
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(store.current);
+  });
+
+  it('adds an empty owner allowlist to existing files without changing other settings', async () => {
+    const path = await temporaryPath();
+    const { ownerIds: _owners, ...legacy } = structuredClone(defaultConfig);
+    legacy.personality = 'My custom personality';
+    await writeFile(path, JSON.stringify(legacy));
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(store.current.ownerIds).toEqual([]);
+    expect(store.current.personality).toBe('My custom personality');
+    expect(JSON.parse(await readFile(path, 'utf8')).ownerIds).toEqual([]);
+  });
+
+  it('adds configurable rate-limit messages to older configs and preserves custom messages', async () => {
+    const path = await temporaryPath();
+    const legacy = structuredClone(defaultConfig);
+    const { messages: _messages, ...limits } = legacy.rateLimits;
+    await writeFile(path, JSON.stringify({ ...legacy, rateLimits: limits }));
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(store.current.rateLimits.messages).toEqual(defaultConfig.rateLimits.messages);
+    await store.set('rateLimits.messages.minute', 'wait {retryAfterSeconds}s');
+    await store.load();
+    expect(store.current.rateLimits.messages.minute).toBe('wait {retryAfterSeconds}s');
+    expect(JSON.parse(await readFile(path, 'utf8')).rateLimits.messages.minute).toBe(
+      'wait {retryAfterSeconds}s',
+    );
   });
 });

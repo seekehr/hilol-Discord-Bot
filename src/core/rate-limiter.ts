@@ -1,5 +1,5 @@
 import type { BotConfig } from '../config/schema.js';
-import { BusyError } from './errors.js';
+import { RateLimitError } from './rate-limit-error.js';
 
 export class UserRateLimiter {
   private readonly users = new Map<string, number[]>();
@@ -19,9 +19,14 @@ export class UserRateLimiter {
       window.length >= limits.userRequests ||
       (times.length && now - times.at(-1)! < limits.userCooldownSeconds * 1_000)
     ) {
-      throw new BusyError(
-        'You are chatting too quickly. Please wait a little before trying again.',
-      );
+      const windowWait =
+        window.length >= limits.userRequests
+          ? window[window.length - limits.userRequests]! + limits.userWindowSeconds * 1_000 - now
+          : 0;
+      const cooldownWait = times.length
+        ? times.at(-1)! + limits.userCooldownSeconds * 1_000 - now
+        : 0;
+      throw new RateLimitError('user', Math.max(windowWait, cooldownWait) / 1_000);
     }
     times.push(now);
     // The schema permits at most 100 requests in any user window. Keeping the latest

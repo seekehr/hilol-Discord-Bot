@@ -8,6 +8,8 @@ import { UserRateLimiter } from '../core/rate-limiter.js';
 import { AutoReplyCooldown, isFreshAutoMessage } from '../core/auto-reply.js';
 import { channelAllowed } from '../core/policy.js';
 import { BusyError, publicError, errorDetails } from '../core/errors.js';
+import { RateLimitError, renderRateLimitMessage } from '../core/rate-limit-error.js';
+import { PreconfiguredResponses } from '../config/preconfigured-responses.js';
 
 export class MessageService {
   private readonly autoCooldown = new AutoReplyCooldown();
@@ -24,6 +26,7 @@ export class MessageService {
     private readonly state: StateStore,
     private readonly provider: ChatProvider,
     private readonly logger: Logger,
+    private readonly responses = new PreconfiguredResponses(),
   ) {}
 
   get autoReplyReadyInSeconds(): number {
@@ -115,18 +118,24 @@ export class MessageService {
       controller = new AbortController();
       this.inFlight.set(message.channelId, controller);
       const botId = this.client.user!.id;
-      const text = message.content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim() || 'Hello!';
-      const input = `${message.author.displayName}: ${text}`.slice(0, config.context.maxInputChars);
-      const history = this.memory.history(message.channelId, config.context, (id) =>
-        this.state.isIgnored(id),
+      const text = message.content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();
+      const input = `${message.author.displayName}: ${text || 'Hello!'}`.slice(
+        0,
+        config.context.maxInputChars,
       );
-      if (!automatic && 'sendTyping' in message.channel)
-        await message.channel.sendTyping().catch(() => undefined);
-      const output = await this.provider.complete(
-        buildPrompt(config, history, input),
-        config,
-        controller.signal,
-      );
+      let output = await this.responses.match(text);
+      if (output === undefined) {
+        const history = this.memory.history(message.channelId, config.context, (id) =>
+          this.state.isIgnored(id),
+        );
+        if (!automatic && 'sendTyping' in message.channel)
+          await message.channel.sendTyping().catch(() => undefined);
+        output = await this.provider.complete(
+          buildPrompt(config, history, input),
+          config,
+          controller.signal,
+        );
+      }
       if (
         controller.signal.aborted ||
         !this.eligible(message) ||
@@ -146,7 +155,13 @@ export class MessageService {
     } catch (error) {
       if (!controller?.signal.aborted) {
         this.logger.warn({ ...errorDetails(error), automatic }, 'Chat request failed');
-        if (!automatic && this.eligible(message)) await this.notice(message, publicError(error));
+        if (!automatic && this.eligible(message)) {
+          const text =
+            error instanceof RateLimitError
+              ? renderRateLimitMessage(error, this.config.current.rateLimits.messages)
+              : publicError(error);
+          await this.notice(message, text);
+        }
       }
       return false;
     } finally {
@@ -156,6 +171,7 @@ export class MessageService {
   }
 
   private async notice(message: Message, content: string): Promise<void> {
+    if (!content.trim()) return;
     const now = Date.now();
     for (const [id, at] of this.lastNotice) if (now - at > 3_600_000) this.lastNotice.delete(id);
     const key = message.channelId;

@@ -5,6 +5,7 @@ dist
 .env.*
 data
 config/*.json
+!config/preconfigured_message_responses.json
 tests
 coverage
 *.log

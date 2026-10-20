@@ -12,6 +12,35 @@ async function stateStore() {
 }
 
 describe('Groq transport', () => {
+  it('supports repeated short chats by replacing reservations with real Groq usage', async () => {
+    const state = await stateStore();
+    const request = vi.fn<typeof fetch>().mockImplementation(async () =>
+      Response.json({
+        choices: [{ message: { content: 'Hello!' } }],
+        usage: { prompt_tokens: 350, completion_tokens: 50, total_tokens: 400 },
+      }),
+    );
+    const provider = new GroqProvider('test-secret', state, request);
+    const messages = [
+      { role: 'system' as const, content: 'You are a friendly Discord companion. '.repeat(60) },
+      ...prompt,
+    ];
+    for (let i = 0; i < 10; i++)
+      await expect(provider.complete(messages, defaultConfig)).resolves.toBe('Hello!');
+    expect(request).toHaveBeenCalledTimes(10);
+    expect(state.usage().reservedTokens).toBe(4_000);
+    expect(state.usage().requests).toBe(10);
+  });
+
+  it('accounts for real usage even if reasoning exhausts the output budget and content is empty', async () => {
+    const state = await stateStore();
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ choices: [], usage: { total_tokens: 300 } }));
+    const provider = new GroqProvider('test-secret', state, request);
+    await expect(provider.complete(prompt, defaultConfig)).rejects.toThrow('empty reply');
+    expect(state.usage().reservedTokens).toBe(300);
+  });
   it('sends bounded chat settings and extracts the reply', async () => {
     const state = await stateStore();
     const request = vi

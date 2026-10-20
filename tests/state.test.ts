@@ -52,11 +52,76 @@ describe('persistent state', () => {
     const path = await temporaryPath();
     const state = new StateStore(path);
     await state.load();
-    await expect(state.reserve(8_000, defaultConfig.rateLimits)).rejects.toThrow(
+    await expect(state.reserve(8_001, defaultConfig.rateLimits)).rejects.toThrow(
       'minute API budget',
     );
     expect(state.usage().requests).toBe(0);
     await writeFile(path, '{}');
     await expect(new StateStore(path).load()).rejects.toThrow();
+  });
+
+  it('settles concurrent reservations independently and preserves actual usage after restart', async () => {
+    const path = await temporaryPath();
+    const state = new StateStore(path);
+    await state.load();
+    const [first, second] = await Promise.all([
+      state.reserve(2_000, defaultConfig.rateLimits),
+      state.reserve(2_000, defaultConfig.rateLimits),
+    ]);
+    await Promise.all([state.settle(second, 300), state.settle(first, 200)]);
+    expect(state.usage().requests).toBe(2);
+    expect(state.usage().reservedTokens).toBe(500);
+    const restarted = new StateStore(path);
+    await restarted.load();
+    expect(restarted.usage().reservedTokens).toBe(500);
+  });
+
+  it('restores capacity after settlement while enforcing exact token and request ceilings', async () => {
+    const state = new StateStore(await temporaryPath());
+    await state.load();
+    const first = await state.reserve(8_000, defaultConfig.rateLimits);
+    await expect(state.reserve(1, defaultConfig.rateLimits)).rejects.toMatchObject({
+      scope: 'minute',
+      resource: 'tokens',
+    });
+    await state.settle(first, 100);
+    await state.reserve(7_900, defaultConfig.rateLimits);
+    expect(state.usage().reservedTokens).toBe(8_000);
+    await expect(
+      state.reserve(0, { ...defaultConfig.rateLimits, requestsPerMinute: 2 }),
+    ).rejects.toMatchObject({ scope: 'minute', resource: 'requests' });
+  });
+
+  it('loads legacy reservations without losing their usage or ignore state', async () => {
+    const path = await temporaryPath();
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        ignores: { [user]: Date.now() + 60_000 },
+        reservations: [{ at: Date.now(), tokens: 700 }],
+        providerBlockedUntil: 0,
+      }),
+    );
+    const state = new StateStore(path);
+    await state.load();
+    expect(state.usage().reservedTokens).toBe(700);
+    expect(state.isIgnored(user)).toBe(true);
+  });
+
+  it('returns the time until enough token capacity is available, not just the first expiry', async () => {
+    let now = 100_000;
+    const state = new StateStore(await temporaryPath(), () => now);
+    await state.load();
+    await state.reserve(2_000, defaultConfig.rateLimits);
+    now += 10_000;
+    await state.reserve(5_000, defaultConfig.rateLimits);
+    await expect(state.reserve(6_000, defaultConfig.rateLimits)).rejects.toMatchObject({
+      scope: 'minute',
+      resource: 'tokens',
+      retryAfterSeconds: 60,
+    });
+    now += 60_000;
+    await state.reserve(6_000, defaultConfig.rateLimits);
   });
 });

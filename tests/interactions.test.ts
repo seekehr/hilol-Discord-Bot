@@ -16,6 +16,7 @@ async function fixture() {
   const config = new ConfigStore(await temporaryPath('bot.json'));
   const state = new StateStore(await temporaryPath());
   await config.load();
+  await config.set('ownerIds', [userId]);
   await state.load();
   const messages = {
     configurationChanged: vi.fn(),
@@ -69,20 +70,22 @@ function command(name: string, admin = true) {
   };
 }
 
-describe('administrator interactions', () => {
-  it('denies configuration changes without Manage Server, including old setup buttons', async () => {
+describe('owner-only interactions', () => {
+  it('denies non-owners even with guild permissions, including old setup buttons', async () => {
     const f = await fixture();
-    const interaction = command('config', false);
+    const interaction = command('config');
+    interaction.user.id = '323456789012345678';
     await f.service.handle(interaction as unknown as Interaction);
     expect(interaction.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Manage Server'),
+        content: expect.stringContaining('Only configured bot owners'),
         flags: MessageFlags.Ephemeral,
       }),
     );
     expect(interaction.deferReply).not.toHaveBeenCalled();
     const button = {
-      ...command('setup', false),
+      ...command('setup'),
+      user: { id: '323456789012345678' },
       isChatInputCommand: () => false,
       isButton: () => true,
       customId: 'setup:toggle-bot',
@@ -94,7 +97,7 @@ describe('administrator interactions', () => {
 
   it('persists slash command settings and invalidates queued replies', async () => {
     const f = await fixture();
-    const interaction = command('config');
+    const interaction = command('config', false);
     interaction.options.getString.mockImplementation((key) =>
       key === 'path' ? 'enabled' : 'false',
     );
@@ -132,7 +135,7 @@ describe('administrator interactions', () => {
     );
   });
 
-  it('allows public status but rejects every interaction in another guild', async () => {
+  it('allows owner status without guild privileges but rejects another guild', async () => {
     const f = await fixture();
     const status = command('status', false);
     await f.service.handle(status as unknown as Interaction);
@@ -145,9 +148,66 @@ describe('administrator interactions', () => {
   });
 
   it('validates all command and setup component payloads locally', () => {
-    expect(commands.find((c) => c.name === 'ignore')?.default_member_permissions).toBeDefined();
+    // Clear the old guild-permission gate when re-registering existing commands.
+    for (const command of commands) expect(command.default_member_permissions).toBeNull();
     expect(personalityModal(defaultConfig, true).toJSON().components).toHaveLength(3);
     for (const row of setupPanel(defaultConfig).components)
       expect(() => row.toJSON()).not.toThrow();
+  });
+
+  it.each(commands.map((c) => c.name))('restricts /%s to listed owners', async (name) => {
+    const f = await fixture();
+    const interaction = command(name);
+    interaction.user.id = '323456789012345678';
+    await f.service.handle(interaction as unknown as Interaction);
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Only configured bot owners'),
+        flags: MessageFlags.Ephemeral,
+      }),
+    );
+    expect(interaction.deferReply).not.toHaveBeenCalled();
+    expect(interaction.showModal).not.toHaveBeenCalled();
+    expect(f.messages.configurationChanged).not.toHaveBeenCalled();
+  });
+
+  it.each(['button', 'channelSelect', 'modal'])(
+    'rejects a revoked owner using a stale %s control',
+    async (kind) => {
+      const f = await fixture();
+      const interaction = {
+        ...command('setup'),
+        isChatInputCommand: () => false,
+        isButton: () => kind === 'button',
+        isChannelSelectMenu: () => kind === 'channelSelect',
+        isModalSubmit: () => kind === 'modal',
+        customId:
+          kind === 'modal'
+            ? 'setup:save'
+            : kind === 'channelSelect'
+              ? 'setup:channel'
+              : 'setup:toggle-bot',
+      };
+      await f.config.set('ownerIds', []);
+      await f.service.handle(interaction as unknown as Interaction);
+      expect(interaction.reply).toHaveBeenCalledWith(
+        expect.objectContaining({ content: expect.stringContaining('Only configured bot owners') }),
+      );
+      expect(interaction.deferReply).not.toHaveBeenCalled();
+      expect(interaction.deferUpdate).not.toHaveBeenCalled();
+      expect(f.client.channels.fetch).not.toHaveBeenCalled();
+      expect(f.config.current.enabled).toBe(true);
+    },
+  );
+
+  it('lets a newly configured owner open a modal without Manage Server', async () => {
+    const f = await fixture();
+    const id = '323456789012345678';
+    await f.config.set('ownerIds', [id]);
+    const interaction = command('personality', false);
+    interaction.user.id = id;
+    await f.service.handle(interaction as unknown as Interaction);
+    expect(interaction.showModal).toHaveBeenCalledOnce();
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 });

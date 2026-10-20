@@ -4,6 +4,8 @@ import type { BotConfig } from '../config/schema.js';
 import { StateStore } from '../storage/state-store.js';
 import { BusyError, UserError } from '../core/errors.js';
 import { setTimeout as delay } from 'node:timers/promises';
+import { estimateRequestTokens, reportedUsageTokens } from './tokens.js';
+import { RateLimitError } from '../core/rate-limit-error.js';
 
 export function retryAfterMilliseconds(value: string | null, now = Date.now()): number {
   if (!value) return 60_000;
@@ -29,12 +31,14 @@ export class GroqProvider implements ChatProvider {
       throw new BusyError('The bot is busy. Please try again shortly.');
     this.active++;
     try {
-      // UTF-8 bytes plus output budget is deliberately conservative, not an exact tokenizer.
-      const reservedTokens =
-        Buffer.byteLength(JSON.stringify(messages), 'utf8') + config.ai.maxOutputTokens + 128;
+      const reservedTokens = estimateRequestTokens(
+        messages,
+        config.ai.model,
+        config.ai.maxOutputTokens,
+      );
       for (let attempt = 0; attempt <= config.ai.maxRetries; attempt++) {
         signal?.throwIfAborted();
-        await this.state.reserve(reservedTokens, config.rateLimits);
+        const reservationId = await this.state.reserve(reservedTokens, config.rateLimits);
         let response: Response;
         try {
           response = await this.request('https://api.groq.com/openai/v1/chat/completions', {
@@ -66,7 +70,7 @@ export class GroqProvider implements ChatProvider {
           const wait = retryAfterMilliseconds(response.headers.get('retry-after'));
           await response.body?.cancel();
           await this.state.blockProvider(wait);
-          throw new BusyError('Groq has reached its rate limit. Please try again later.');
+          throw new RateLimitError('provider', wait / 1_000, 'cooldown');
         }
         if (!response.ok) {
           await response.body?.cancel();
@@ -90,6 +94,8 @@ export class GroqProvider implements ChatProvider {
         } catch {
           throw new UserError('Groq returned an unreadable response. Please try again later.');
         }
+        const actualTokens = reportedUsageTokens(data);
+        if (actualTokens !== undefined) await this.state.settle(reservationId, actualTokens);
         const content = (data as { choices?: { message?: { content?: unknown } }[] } | null)
           ?.choices?.[0]?.message?.content;
         if (typeof content !== 'string' || !content.trim())

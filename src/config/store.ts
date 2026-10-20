@@ -54,7 +54,12 @@ export class ConfigStore {
       const disk = await readJson(this.path);
       const migrated = migrateLegacyConfig(disk ?? defaultConfig);
       const next = this.validate(migrated);
-      if (disk === undefined || migrated !== disk) await writeJson(this.path, next);
+      if (
+        disk === undefined ||
+        migrated !== disk ||
+        JSON.stringify(next) !== JSON.stringify(migrated)
+      )
+        await writeJson(this.path, next);
       this.value = next;
       this.revision++;
     });

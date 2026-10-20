@@ -1,4 +1,5 @@
 {
+  "ownerIds": [],
   "enabled": true,
   "personality": "You are Hilol, a friendly, thoughtful Discord companion. Be conversational and concise. Match the conversation naturally and be honest when unsure. Avoid unsolicited mentions.",
   "triggers": {
@@ -30,13 +31,19 @@
     "maxChannels": 100
   },
   "rateLimits": {
-    "userRequests": 5,
+    "userRequests": 30,
     "userWindowSeconds": 60,
-    "userCooldownSeconds": 5,
-    "requestsPerMinute": 25,
-    "requestsPerDay": 900,
-    "tokensPerMinute": 7000,
-    "tokensPerDay": 180000,
-    "errorNoticeCooldownSeconds": 30
+    "userCooldownSeconds": 0,
+    "requestsPerMinute": 30,
+    "requestsPerDay": 1000,
+    "tokensPerMinute": 8000,
+    "tokensPerDay": 200000,
+    "errorNoticeCooldownSeconds": 30,
+    "messages": {
+      "user": "You are chatting too quickly. Please try again in {retryAfterSeconds}s.",
+      "minute": "The bot has reached its minute API budget ({resource}). Please try again in {retryAfterSeconds}s.",
+      "day": "The bot has reached its daily API budget ({resource}). Please try again in {retryAfterSeconds}s.",
+      "provider": "Groq is cooling down after a rate limit. Please try again in {retryAfterSeconds}s."
+    }
   }
 }

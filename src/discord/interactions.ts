@@ -34,14 +34,10 @@ export class InteractionService {
     try {
       if (interaction.guildId !== this.guildId)
         throw new UserError('This bot only works in its configured server.');
-      const publicCommand =
-        interaction.isChatInputCommand() && ['help', 'status'].includes(interaction.commandName);
-      if (!publicCommand) {
-        // Discord supplies fresh permissions with each interaction. Check the payload even
-        // for old setup panels; avoiding an extra REST call also meets the 3s ACK deadline.
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
-          throw new UserError('You need the Manage Server permission to change bot settings.');
-      }
+      // Recheck the live config for every command, button, select, and modal submission.
+      // Guild ownership, Administrator, and Manage Server never bypass this allowlist.
+      if (!this.config.current.ownerIds.includes(interaction.user.id))
+        throw new UserError('Only configured bot owners can use bot commands and setup controls.');
 
       if (interaction.isChatInputCommand()) {
         const command = interaction.commandName;
@@ -111,14 +107,14 @@ export class InteractionService {
             const config = this.config.current;
             const usage = this.state.usage();
             await interaction.editReply({
-              content: `Bot: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nAutomatic replies: ${config.autoReply.enabled ? 'on' : 'off'} (${this.messages.autoReplyReadyInSeconds}s cooldown remaining)\nLocal rolling 24h budget: ${usage.requests}/${config.rateLimits.requestsPerDay} attempts, ${usage.reservedTokens}/${config.rateLimits.tokensPerDay} reserved tokens\nActive ignores: ${this.state.activeIgnores()}\nProvider cooldown: ${usage.blockedUntil > Date.now() ? `<t:${Math.ceil(usage.blockedUntil / 1_000)}:R>` : 'none'}\nThese are local reservations; Groq account usage may differ.`,
+              content: `Bot: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nAutomatic replies: ${config.autoReply.enabled ? 'on' : 'off'} (${this.messages.autoReplyReadyInSeconds}s cooldown remaining)\nLocal rolling 24h budget: ${usage.requests}/${config.rateLimits.requestsPerDay} attempts, ${usage.reservedTokens}/${config.rateLimits.tokensPerDay} accounted tokens\nActive ignores: ${this.state.activeIgnores()}\nProvider cooldown: ${usage.blockedUntil > Date.now() ? `<t:${Math.ceil(usage.blockedUntil / 1_000)}:R>` : 'none'}\nCompleted requests use Groq-reported tokens; in-flight and unreported usage is estimated. Shared account usage may differ.`,
               allowedMentions: { parse: [] },
             });
             return;
           }
           case 'help':
             await interaction.editReply(
-              'Mention me or reply to one of my messages to chat. In the selected channel I answer new messages immediately when ready, with a random 10–15 minute cooldown between automatic replies. Messages older than two minutes are skipped. I never ping anyone.\n\nAdministrators (Manage Server): /setup, /personality, /config show|set|reload, /ignore user time, /unignore user, /forget.\nExamples: `/ignore @user 2h`, `/config set path:ai.model value:openai/gpt-oss-20b`, `/config set path:enabled value:false`.\n\nConversation context is shared within each channel, kept in memory temporarily, and sent to Groq when generating replies. Ignored users receive no chat responses.',
+              'Mention me or reply to one of my messages to chat. In the selected channel I answer new messages immediately when ready, with a random 10–15 minute cooldown between automatic replies. Messages older than two minutes are skipped. I never ping anyone.\n\nBot owners: /setup, /personality, /config show|set|reload, /ignore user time, /unignore user, /forget.\nExamples: `/ignore @user 2h`, `/config set path:ai.model value:openai/gpt-oss-20b`, `/config set path:enabled value:false`.\n\nConversation context is shared within each channel, kept in memory temporarily, and sent to Groq when generating replies. Ignored users receive no chat responses.',
             );
             return;
           default:

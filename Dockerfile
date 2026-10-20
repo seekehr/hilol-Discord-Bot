@@ -17,6 +17,7 @@ WORKDIR /app
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
+COPY --chown=node:node config/preconfigured_message_responses.json ./config/
 RUN mkdir -p /app/config /app/data && chown -R node:node /app/config /app/data
 USER node
 CMD ["node", "--enable-source-maps", "dist/index.js"]

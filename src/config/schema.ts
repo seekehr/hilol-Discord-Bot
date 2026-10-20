@@ -1,11 +1,19 @@
 import { z } from 'zod';
 import { MAX_AUTO_MESSAGE_AGE_SECONDS } from '../core/auto-reply.js';
+import { defaultRateLimitMessages } from '../core/rate-limit-error.js';
 
 const id = z.string().regex(/^\d{17,20}$/, 'Expected a Discord snowflake ID');
 const integer = (min: number, max: number) => z.number().int().min(min).max(max);
+const rateLimitMessagesSchema = z.strictObject({
+  user: z.string().max(1_800).default(defaultRateLimitMessages.user),
+  minute: z.string().max(1_800).default(defaultRateLimitMessages.minute),
+  day: z.string().max(1_800).default(defaultRateLimitMessages.day),
+  provider: z.string().max(1_800).default(defaultRateLimitMessages.provider),
+});
 
 export const configSchema = z
   .strictObject({
+    ownerIds: z.array(id).max(100).default([]),
     enabled: z.boolean(),
     personality: z.string().trim().min(1).max(4_000),
     triggers: z.strictObject({
@@ -46,6 +54,7 @@ export const configSchema = z
       tokensPerMinute: integer(1_000, 10_000_000),
       tokensPerDay: integer(1_000, 1_000_000_000),
       errorNoticeCooldownSeconds: integer(5, 3_600),
+      messages: rateLimitMessagesSchema.default(defaultRateLimitMessages),
     }),
   })
   .superRefine((config, ctx) => {
@@ -68,6 +77,7 @@ export const configSchema = z
 export type BotConfig = z.infer<typeof configSchema>;
 
 export const defaultConfig: BotConfig = {
+  ownerIds: [],
   enabled: true,
   personality:
     'You are Hilol, a friendly, thoughtful Discord companion. Be conversational and concise. Match the conversation naturally and be honest when unsure. Avoid unsolicited mentions.',
@@ -95,13 +105,14 @@ export const defaultConfig: BotConfig = {
     maxChannels: 100,
   },
   rateLimits: {
-    userRequests: 5,
+    userRequests: 30,
     userWindowSeconds: 60,
-    userCooldownSeconds: 5,
-    requestsPerMinute: 25,
-    requestsPerDay: 900,
-    tokensPerMinute: 7_000,
-    tokensPerDay: 180_000,
+    userCooldownSeconds: 0,
+    requestsPerMinute: 30,
+    requestsPerDay: 1_000,
+    tokensPerMinute: 8_000,
+    tokensPerDay: 200_000,
     errorNoticeCooldownSeconds: 30,
+    messages: { ...defaultRateLimitMessages },
   },
 };
