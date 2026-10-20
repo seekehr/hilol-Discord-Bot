@@ -12,7 +12,7 @@ import type { BotConfig } from '../config/schema.js';
 
 export function setupPanel(config: BotConfig) {
   return {
-    content: `**Hilol setup**\nBot: **${config.enabled ? 'enabled' : 'paused'}**\nAutomatic replies: **${config.autoReply.enabled ? 'on' : 'off'}**\nChannel: ${config.autoReply.channelId ? `<#${config.autoReply.channelId}>` : 'not selected'}\nDelay: ${config.autoReply.minDelaySeconds}–${config.autoReply.maxDelaySeconds} seconds\nModel: \`${config.ai.model.replace(/`/g, '')}\`\n\nChoose a channel to enable automatic replies. Edit personality and timing below. Changes save immediately. Use /config for all other settings.`,
+    content: `**Hilol setup**\nBot: **${config.enabled ? 'enabled' : 'paused'}**\nAutomatic replies: **${config.autoReply.enabled ? 'on' : 'off'}**\nChannel: ${config.autoReply.channelId ? `<#${config.autoReply.channelId}>` : 'not selected'}\nCooldown between auto replies: ${config.autoReply.minIntervalSeconds}–${config.autoReply.maxIntervalSeconds} seconds\nModel: \`${config.ai.model.replace(/`/g, '')}\`\n\nChoose a channel to enable automatic replies. Edit personality and timing below. Changes save immediately. Use /config for all other settings.`,
     components: [
       new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
         new ChannelSelectMenuBuilder()
@@ -58,8 +58,8 @@ export function personalityModal(config: BotConfig, setup = false): ModalBuilder
   );
   if (setup) {
     for (const [id, label, value] of [
-      ['min', 'Minimum delay in seconds (300 = 5 min)', config.autoReply.minDelaySeconds],
-      ['max', 'Maximum delay in seconds (600 = 10 min)', config.autoReply.maxDelaySeconds],
+      ['min', 'Min cooldown seconds (600 = 10 min)', config.autoReply.minIntervalSeconds],
+      ['max', 'Max cooldown seconds (900 = 15 min)', config.autoReply.maxIntervalSeconds],
     ] as const) {
       modal.addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(

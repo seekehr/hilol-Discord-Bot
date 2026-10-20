@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_AUTO_MESSAGE_AGE_SECONDS } from '../core/auto-reply.js';
 
 const id = z.string().regex(/^\d{17,20}$/, 'Expected a Discord snowflake ID');
 const integer = (min: number, max: number) => z.number().int().min(min).max(max);
@@ -17,9 +18,9 @@ export const configSchema = z
     autoReply: z.strictObject({
       enabled: z.boolean(),
       channelId: id.nullable(),
-      minDelaySeconds: integer(10, 86_400),
-      maxDelaySeconds: integer(10, 86_400),
-      maxMessageAgeSeconds: integer(10, 172_800),
+      minIntervalSeconds: integer(10, 86_400),
+      maxIntervalSeconds: integer(10, 86_400),
+      maxMessageAgeSeconds: integer(1, MAX_AUTO_MESSAGE_AGE_SECONDS),
     }),
     ai: z.strictObject({
       model: z.string().trim().min(1).max(150),
@@ -48,18 +49,11 @@ export const configSchema = z
     }),
   })
   .superRefine((config, ctx) => {
-    if (config.autoReply.minDelaySeconds > config.autoReply.maxDelaySeconds) {
+    if (config.autoReply.minIntervalSeconds > config.autoReply.maxIntervalSeconds) {
       ctx.addIssue({
         code: 'custom',
         path: ['autoReply'],
-        message: 'Minimum delay must not exceed maximum delay',
-      });
-    }
-    if (config.autoReply.maxMessageAgeSeconds < config.autoReply.maxDelaySeconds) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['autoReply', 'maxMessageAgeSeconds'],
-        message: 'Message age must cover the maximum delay',
+        message: 'Minimum interval must not exceed maximum interval',
       });
     }
     if (config.autoReply.enabled && !config.autoReply.channelId) {
@@ -81,9 +75,9 @@ export const defaultConfig: BotConfig = {
   autoReply: {
     enabled: false,
     channelId: null,
-    minDelaySeconds: 300,
-    maxDelaySeconds: 600,
-    maxMessageAgeSeconds: 1_800,
+    minIntervalSeconds: 600,
+    maxIntervalSeconds: 900,
+    maxMessageAgeSeconds: 120,
   },
   ai: {
     model: 'openai/gpt-oss-20b',

@@ -10,9 +10,7 @@ try {
       body: commands,
     });
   console.log(`Registered ${commands.length} commands for the configured server.`);
-} catch {
-  console.error(
-    'Command registration failed. Check the environment, application ID, guild ID, and bot installation.',
-  );
+} catch (error) {
+  console.error('Command registration failed:', error);
   process.exitCode = 1;
 }

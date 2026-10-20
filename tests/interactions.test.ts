@@ -21,7 +21,7 @@ async function fixture() {
     configurationChanged: vi.fn(),
     userIgnored: vi.fn(),
     forget: vi.fn(),
-    scheduler: { size: 0 },
+    autoReplyReadyInSeconds: 0,
   };
   const client = { ws: { ping: 25 }, channels: { fetch: vi.fn() }, user: { id: 'bot' } };
   const service = new InteractionService(

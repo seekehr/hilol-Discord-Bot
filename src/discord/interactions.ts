@@ -80,7 +80,7 @@ export class InteractionService {
             }
             this.messages.configurationChanged();
             await interaction.editReply(
-              'Configuration saved and applied. Pending replies and old context were cleared.',
+              'Configuration saved and applied. In-flight replies and old context were cleared.',
             );
             return;
           }
@@ -103,7 +103,7 @@ export class InteractionService {
           case 'forget': {
             this.messages.forget(interaction.channelId!);
             await interaction.editReply(
-              'Bot context and pending automatic reply cleared for this channel. Discord messages remain visible.',
+              'Bot context cleared for this channel. Discord messages remain visible.',
             );
             return;
           }
@@ -111,14 +111,14 @@ export class InteractionService {
             const config = this.config.current;
             const usage = this.state.usage();
             await interaction.editReply({
-              content: `Bot: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nAutomatic replies: ${config.autoReply.enabled ? 'on' : 'off'} (${this.messages.scheduler.size} pending)\nLocal rolling 24h budget: ${usage.requests}/${config.rateLimits.requestsPerDay} attempts, ${usage.reservedTokens}/${config.rateLimits.tokensPerDay} reserved tokens\nActive ignores: ${this.state.activeIgnores()}\nProvider cooldown: ${usage.blockedUntil > Date.now() ? `<t:${Math.ceil(usage.blockedUntil / 1_000)}:R>` : 'none'}\nThese are local reservations; Groq account usage may differ.`,
+              content: `Bot: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nAutomatic replies: ${config.autoReply.enabled ? 'on' : 'off'} (${this.messages.autoReplyReadyInSeconds}s cooldown remaining)\nLocal rolling 24h budget: ${usage.requests}/${config.rateLimits.requestsPerDay} attempts, ${usage.reservedTokens}/${config.rateLimits.tokensPerDay} reserved tokens\nActive ignores: ${this.state.activeIgnores()}\nProvider cooldown: ${usage.blockedUntil > Date.now() ? `<t:${Math.ceil(usage.blockedUntil / 1_000)}:R>` : 'none'}\nThese are local reservations; Groq account usage may differ.`,
               allowedMentions: { parse: [] },
             });
             return;
           }
           case 'help':
             await interaction.editReply(
-              'Mention me or reply to one of my messages to chat. In the selected automatic channel I also reply after a random delay, without pinging anyone.\n\nAdministrators (Manage Server): /setup, /personality, /config show|set|reload, /ignore user time, /unignore user, /forget.\nExamples: `/ignore @user 2h`, `/config set path:ai.model value:openai/gpt-oss-20b`, `/config set path:enabled value:false`.\n\nConversation context is shared within each channel, kept in memory temporarily, and sent to Groq when generating replies. Ignored users receive no chat responses.',
+              'Mention me or reply to one of my messages to chat. In the selected channel I answer new messages immediately when ready, with a random 10–15 minute cooldown between automatic replies. Messages older than two minutes are skipped. I never ping anyone.\n\nAdministrators (Manage Server): /setup, /personality, /config show|set|reload, /ignore user time, /unignore user, /forget.\nExamples: `/ignore @user 2h`, `/config set path:ai.model value:openai/gpt-oss-20b`, `/config set path:enabled value:false`.\n\nConversation context is shared within each channel, kept in memory temporarily, and sent to Groq when generating replies. Ignored users receive no chat responses.',
             );
             return;
           default:
@@ -182,11 +182,11 @@ export class InteractionService {
         await this.config.update((draft) => {
           draft.personality = interaction.fields.getTextInputValue('personality');
           if (interaction.customId === 'setup:save') {
-            draft.autoReply.minDelaySeconds = Number(interaction.fields.getTextInputValue('min'));
-            draft.autoReply.maxDelaySeconds = Number(interaction.fields.getTextInputValue('max'));
-            draft.autoReply.maxMessageAgeSeconds = Math.max(
-              draft.autoReply.maxMessageAgeSeconds,
-              draft.autoReply.maxDelaySeconds,
+            draft.autoReply.minIntervalSeconds = Number(
+              interaction.fields.getTextInputValue('min'),
+            );
+            draft.autoReply.maxIntervalSeconds = Number(
+              interaction.fields.getTextInputValue('max'),
             );
           }
         });

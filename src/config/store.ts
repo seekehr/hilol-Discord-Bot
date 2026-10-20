@@ -2,6 +2,32 @@ import { configSchema, defaultConfig, type BotConfig } from './schema.js';
 import { readJson, writeJson, SerialQueue } from '../storage/json-file.js';
 import { UserError } from '../core/errors.js';
 
+// Upgrade the former delayed-reply settings without touching unrelated settings.
+function migrateLegacyConfig(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || !('autoReply' in value)) return value;
+  const auto = value.autoReply;
+  if (
+    !auto ||
+    typeof auto !== 'object' ||
+    !('minDelaySeconds' in auto) ||
+    !('maxDelaySeconds' in auto)
+  )
+    return value;
+  const { minDelaySeconds: _min, maxDelaySeconds: _max, ...rest } = auto;
+  return {
+    ...value,
+    autoReply: {
+      ...rest,
+      minIntervalSeconds: defaultConfig.autoReply.minIntervalSeconds,
+      maxIntervalSeconds: defaultConfig.autoReply.maxIntervalSeconds,
+      maxMessageAgeSeconds:
+        'maxMessageAgeSeconds' in auto && typeof auto.maxMessageAgeSeconds === 'number'
+          ? Math.min(auto.maxMessageAgeSeconds, 120)
+          : 120,
+    },
+  };
+}
+
 export class ConfigStore {
   revision = 0;
   private value: BotConfig = structuredClone(defaultConfig);
@@ -26,8 +52,9 @@ export class ConfigStore {
   async load(): Promise<void> {
     await this.queue.run(async () => {
       const disk = await readJson(this.path);
-      const next = this.validate(disk ?? defaultConfig);
-      if (disk === undefined) await writeJson(this.path, next);
+      const migrated = migrateLegacyConfig(disk ?? defaultConfig);
+      const next = this.validate(migrated);
+      if (disk === undefined || migrated !== disk) await writeJson(this.path, next);
       this.value = next;
       this.revision++;
     });

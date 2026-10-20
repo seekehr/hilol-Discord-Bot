@@ -1,45 +1,70 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
-import { AutoReplyScheduler } from '../src/core/auto-reply.js';
+import { describe, it, expect, vi } from 'vitest';
+import { AutoReplyCooldown, isFreshAutoMessage } from '../src/core/auto-reply.js';
 import { UserRateLimiter } from '../src/core/rate-limiter.js';
 import { ConversationMemory } from '../src/core/conversation.js';
 import { channelAllowed } from '../src/core/policy.js';
 import { parseDuration } from '../src/core/time.js';
 import { defaultConfig } from '../src/config/schema.js';
 
-afterEach(() => vi.useRealTimers());
-describe('automatic reply windows', () => {
-  it('coalesces to the latest candidate without postponing the first timer', async () => {
-    vi.useFakeTimers();
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const scheduler = new AutoReplyScheduler(deliver, vi.fn(), () => 0.5);
-    const first = { channelId: 'channel', messageId: 'first', userId: 'user', createdAt: 0 };
-    scheduler.schedule(first, 300, 600);
-    await vi.advanceTimersByTimeAsync(400_000);
-    scheduler.schedule({ ...first, messageId: 'latest' }, 300, 600);
-    await vi.advanceTimersByTimeAsync(49_999);
-    expect(deliver).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(deliver).toHaveBeenCalledExactlyOnceWith({ ...first, messageId: 'latest' });
-    expect(scheduler.size).toBe(0);
+describe('automatic reply cooldowns', () => {
+  it('replies immediately, skips during cooldown, and only replies again on a new event', async () => {
+    let now = 0;
+    const cooldown = new AutoReplyCooldown(
+      () => now,
+      () => 0.5,
+    );
+    const deliver = vi.fn().mockResolvedValue(true);
+    await cooldown.run('channel', 600, 900, deliver);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(cooldown.remainingSeconds('channel')).toBe(750);
+    now += 749_999;
+    await cooldown.run('channel', 600, 900, deliver);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    now++;
+    expect(cooldown.remainingSeconds('channel')).toBe(0);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    await cooldown.run('channel', 600, 900, deliver);
+    expect(deliver).toHaveBeenCalledTimes(2);
   });
 
-  it('cancels timers for ignored users and catches delivery errors', async () => {
-    vi.useFakeTimers();
-    const error = new Error('delivery failure');
-    const deliver = vi.fn().mockRejectedValue(error);
-    const onError = vi.fn();
-    const scheduler = new AutoReplyScheduler(deliver, onError, () => 0);
-    scheduler.schedule(
-      { channelId: 'one', messageId: 'a', userId: 'ignored', createdAt: 0 },
-      10,
-      10,
+  it('does not start a cooldown on skipped or failed sends', async () => {
+    const cooldown = new AutoReplyCooldown(() => 0);
+    await cooldown.run('channel', 600, 900, async () => false);
+    await expect(
+      cooldown.run('channel', 600, 900, async () => {
+        throw new Error('failed');
+      }),
+    ).rejects.toThrow('failed');
+    const deliver = vi.fn().mockResolvedValue(true);
+    await cooldown.run('channel', 600, 900, deliver);
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('prevents concurrent automatic replies in the same channel', async () => {
+    const cooldown = new AutoReplyCooldown(() => 0);
+    let finish: (sent: boolean) => void = () => undefined;
+    const first = cooldown.run(
+      'channel',
+      600,
+      900,
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
     );
-    scheduler.schedule({ channelId: 'two', messageId: 'b', userId: 'other', createdAt: 0 }, 10, 10);
-    scheduler.cancelUser('ignored');
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith(error);
-    scheduler.clear();
+    const deliver = vi.fn().mockResolvedValue(true);
+    await cooldown.run('channel', 600, 900, deliver);
+    expect(deliver).not.toHaveBeenCalled();
+    finish(true);
+    await first;
+  });
+
+  it('enforces the two-minute boundary even if a caller supplies a larger limit', () => {
+    expect(isFreshAutoMessage(0, 120, 120_000)).toBe(true);
+    expect(isFreshAutoMessage(0, 120, 120_001)).toBe(false);
+    expect(isFreshAutoMessage(0, 1800, 120_001)).toBe(false);
+    expect(isFreshAutoMessage(100, 120, 0)).toBe(false);
+    expect(isFreshAutoMessage(0, 30, 30_001)).toBe(false);
   });
 });
 

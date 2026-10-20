@@ -98,29 +98,115 @@ describe('Discord message routing', () => {
     f.service.stop();
   });
 
-  it('delivers a delayed auto reply using refreshed content', async () => {
+  it('answers immediately, skips cooldown messages without queueing, then answers the next fresh message', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const f = await fixture();
     await f.config.update((c) => {
       c.autoReply.enabled = true;
       c.autoReply.channelId = channelId;
-      c.autoReply.minDelaySeconds = 10;
-      c.autoReply.maxDelaySeconds = 10;
     });
-    vi.useFakeTimers();
+    const start = Date.now();
     const automatic = {
       ...f.message,
       content: 'An ordinary message',
       mentions: { users: new Map() },
     };
-    f.fetchMessage.mockResolvedValue({ ...automatic, content: 'Edited message' });
     await f.service.handle(automatic as unknown as Message);
-    expect(f.provider.complete).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(10_000);
-    // Async filesystem quota is not involved: this provider is a stub.
     expect(f.provider.complete).toHaveBeenCalledTimes(1);
-    const prompts = f.provider.complete.mock.calls[0]![0];
-    expect(prompts.at(-1).content).toContain('Edited message');
     expect(f.reply).toHaveBeenCalledTimes(1);
+    expect(f.service.autoReplyReadyInSeconds).toBeGreaterThanOrEqual(600);
+    expect(f.service.autoReplyReadyInSeconds).toBeLessThanOrEqual(900);
+    vi.setSystemTime(start + 10_000);
+    await f.service.handle({
+      ...automatic,
+      id: 'during-cooldown',
+      createdTimestamp: Date.now(),
+    } as unknown as Message);
+    expect(f.provider.complete).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(start + 900_001);
+    expect(f.provider.complete).toHaveBeenCalledTimes(1);
+    await f.service.handle({
+      ...automatic,
+      id: 'next-fresh',
+      content: 'Fresh message',
+      createdTimestamp: Date.now(),
+    } as unknown as Message);
+    expect(f.provider.complete).toHaveBeenCalledTimes(2);
+    expect(f.provider.complete.mock.calls[1]![0].at(-1).content).toContain('Fresh message');
+    expect(f.fetchMessage).not.toHaveBeenCalled();
+    f.service.stop();
+  });
+
+  it.each([120_000, 120_001, 900_000])(
+    'checks automatic message age at %i milliseconds',
+    async (age) => {
+      const f = await fixture();
+      await f.config.update((c) => {
+        c.autoReply.enabled = true;
+        c.autoReply.channelId = channelId;
+      });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      await f.service.handle({
+        ...f.message,
+        content: 'Ordinary message',
+        mentions: { users: new Map() },
+        createdTimestamp: Date.now() - age,
+      } as unknown as Message);
+      expect(f.provider.complete).toHaveBeenCalledTimes(age <= 120_000 ? 1 : 0);
+      expect(f.reply).toHaveBeenCalledTimes(age <= 120_000 ? 1 : 0);
+      f.service.stop();
+    },
+  );
+
+  it('drops a generated auto reply if the message passes two minutes before sending', async () => {
+    const f = await fixture();
+    await f.config.update((c) => {
+      c.autoReply.enabled = true;
+      c.autoReply.channelId = channelId;
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = Date.now();
+    f.provider.complete.mockImplementation(async () => {
+      vi.setSystemTime(now + 120_001);
+      return 'An expired reply';
+    });
+    await f.service.handle({
+      ...f.message,
+      content: 'Ordinary message',
+      mentions: { users: new Map() },
+      createdTimestamp: now,
+    } as unknown as Message);
+    expect(f.provider.complete).toHaveBeenCalledOnce();
+    expect(f.reply).not.toHaveBeenCalled();
+    expect(f.service.autoReplyReadyInSeconds).toBe(0);
+    f.service.stop();
+  });
+
+  it('lets mentions and replies bypass auto cooldown without resetting it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const f = await fixture();
+    await f.config.update((c) => {
+      c.autoReply.enabled = true;
+      c.autoReply.channelId = channelId;
+    });
+    const start = Date.now();
+    const automatic = { ...f.message, content: 'Ordinary message', mentions: { users: new Map() } };
+    await f.service.handle(automatic as unknown as Message);
+    const cooldown = f.service.autoReplyReadyInSeconds;
+    vi.setSystemTime(start + 6_000);
+    await f.service.handle({ ...f.message, createdTimestamp: Date.now() } as unknown as Message);
+    vi.setSystemTime(start + 12_000);
+    await f.service.handle({
+      ...automatic,
+      createdTimestamp: Date.now(),
+      reference: { messageId: 'bot-message' },
+    } as unknown as Message);
+    expect(f.reply).toHaveBeenCalledTimes(3);
+    expect(f.service.autoReplyReadyInSeconds).toBe(cooldown - 12);
+    f.service.configurationChanged();
+    f.service.forget(channelId);
+    await f.service.handle({ ...automatic, createdTimestamp: Date.now() } as unknown as Message);
+    expect(f.reply).toHaveBeenCalledTimes(3);
     f.service.stop();
   });
 

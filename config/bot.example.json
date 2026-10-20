@@ -10,9 +10,9 @@
   "autoReply": {
     "enabled": false,
     "channelId": null,
-    "minDelaySeconds": 300,
-    "maxDelaySeconds": 600,
-    "maxMessageAgeSeconds": 1800
+    "minIntervalSeconds": 600,
+    "maxIntervalSeconds": 900,
+    "maxMessageAgeSeconds": 120
   },
   "ai": {
     "model": "openai/gpt-oss-20b",

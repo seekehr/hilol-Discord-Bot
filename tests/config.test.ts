@@ -27,7 +27,12 @@ describe('configuration transactions', () => {
     const store = new ConfigStore(path);
     await store.load();
     const before = await readFile(path, 'utf8');
-    await expect(store.set('autoReply.minDelaySeconds', 700)).rejects.toThrow('Minimum delay');
+    await expect(store.set('autoReply.minIntervalSeconds', 1_000)).rejects.toThrow(
+      'Minimum interval',
+    );
+    await expect(store.set('autoReply.maxMessageAgeSeconds', 121)).rejects.toThrow(
+      'Invalid configuration',
+    );
     await expect(store.set('autoReply.enabled', true)).rejects.toThrow('Select a channel');
     await expect(store.set('ai.temperature', 'hot')).rejects.toThrow('Invalid configuration');
     await expect(store.set('__proto__.polluted', true)).rejects.toThrow('Invalid setting path');
@@ -50,5 +55,32 @@ describe('configuration transactions', () => {
     await store.load();
     store.current.triggers.excludedChannelIds.push('123456789012345678');
     expect(store.current.triggers.excludedChannelIds).toEqual([]);
+  });
+
+  it('migrates old delay settings to 10–15 minute intervals without losing customization', async () => {
+    const path = await temporaryPath();
+    const legacy = {
+      ...structuredClone(defaultConfig),
+      personality: 'Keep my personality',
+      autoReply: {
+        enabled: true,
+        channelId: '123456789012345678',
+        minDelaySeconds: 300,
+        maxDelaySeconds: 600,
+        maxMessageAgeSeconds: 1800,
+      },
+    };
+    await writeFile(path, JSON.stringify(legacy));
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(store.current.personality).toBe('Keep my personality');
+    expect(store.current.autoReply).toEqual({
+      enabled: true,
+      channelId: '123456789012345678',
+      minIntervalSeconds: 600,
+      maxIntervalSeconds: 900,
+      maxMessageAgeSeconds: 120,
+    });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(store.current);
   });
 });

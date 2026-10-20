@@ -5,12 +5,12 @@ import type { StateStore } from '../storage/state-store.js';
 import type { ChatProvider } from '../ai/provider.js';
 import { ConversationMemory, buildPrompt } from '../core/conversation.js';
 import { UserRateLimiter } from '../core/rate-limiter.js';
-import { AutoReplyScheduler, type AutoCandidate } from '../core/auto-reply.js';
+import { AutoReplyCooldown, isFreshAutoMessage } from '../core/auto-reply.js';
 import { channelAllowed } from '../core/policy.js';
 import { BusyError, publicError, errorDetails } from '../core/errors.js';
 
 export class MessageService {
-  readonly scheduler: AutoReplyScheduler;
+  private readonly autoCooldown = new AutoReplyCooldown();
   private readonly limiter = new UserRateLimiter();
   private readonly memory = new ConversationMemory();
   private readonly inFlight = new Map<string, AbortController>();
@@ -24,10 +24,17 @@ export class MessageService {
     private readonly state: StateStore,
     private readonly provider: ChatProvider,
     private readonly logger: Logger,
-  ) {
-    this.scheduler = new AutoReplyScheduler(
-      (candidate) => this.deliverAutomatic(candidate),
-      (error) => this.logger.warn(errorDetails(error), 'Automatic reply skipped'),
+  ) {}
+
+  get autoReplyReadyInSeconds(): number {
+    const channelId = this.config.current.autoReply.channelId;
+    return channelId ? this.autoCooldown.remainingSeconds(channelId) : 0;
+  }
+
+  private freshForAutoReply(message: Message): boolean {
+    return isFreshAutoMessage(
+      message.createdTimestamp,
+      this.config.current.autoReply.maxMessageAgeSeconds,
     );
   }
 
@@ -61,40 +68,19 @@ export class MessageService {
       direct = reference?.author.id === botId;
     }
     if (direct && channelAllowed(config, message.channelId, parentId, true)) {
-      this.scheduler.cancel(message.channelId);
       await this.respond(message, false);
-    } else if (!direct && channelAllowed(config, message.channelId, parentId, false)) {
-      this.scheduler.schedule(
-        {
-          channelId: message.channelId,
-          messageId: message.id,
-          userId: message.author.id,
-          createdAt: message.createdTimestamp,
-        },
-        config.autoReply.minDelaySeconds,
-        config.autoReply.maxDelaySeconds,
+    } else if (
+      !direct &&
+      channelAllowed(config, message.channelId, parentId, false) &&
+      this.freshForAutoReply(message)
+    ) {
+      await this.autoCooldown.run(
+        message.channelId,
+        config.autoReply.minIntervalSeconds,
+        config.autoReply.maxIntervalSeconds,
+        () => this.respond(message, true),
       );
     }
-  }
-
-  private async deliverAutomatic(candidate: AutoCandidate): Promise<void> {
-    const config = this.config.current;
-    if (
-      this.stopped ||
-      !config.enabled ||
-      !config.autoReply.enabled ||
-      config.autoReply.channelId !== candidate.channelId ||
-      this.state.isIgnored(candidate.userId) ||
-      Date.now() - candidate.createdAt > config.autoReply.maxMessageAgeSeconds * 1_000
-    )
-      return;
-    const channel = await this.client.channels.fetch(candidate.channelId);
-    if (!channel?.isTextBased() || !('messages' in channel)) return;
-    // Refresh content so deleted messages are skipped and edits are honored.
-    const message = await channel.messages
-      .fetch({ message: candidate.messageId, force: true })
-      .catch(() => null);
-    if (message && this.eligible(message)) await this.respond(message, true);
   }
 
   private canSend(message: Message): boolean {
@@ -110,14 +96,19 @@ export class MessageService {
     ]);
   }
 
-  private async respond(message: Message, automatic: boolean): Promise<void> {
+  private async respond(message: Message, automatic: boolean): Promise<boolean> {
     let controller: AbortController | undefined;
     try {
-      if (!this.eligible(message) || !this.canSend(message)) return;
+      if (
+        !this.eligible(message) ||
+        !this.canSend(message) ||
+        (automatic && !this.freshForAutoReply(message))
+      )
+        return false;
       const config = this.config.current;
       const revision = this.config.revision;
       const parentId = 'parentId' in message.channel ? message.channel.parentId : null;
-      if (!channelAllowed(config, message.channelId, parentId, !automatic)) return;
+      if (!channelAllowed(config, message.channelId, parentId, !automatic)) return false;
       if (this.inFlight.has(message.channelId))
         throw new BusyError('I am already replying in this channel. Please try again shortly.');
       this.limiter.consume(message.author.id, config.rateLimits);
@@ -140,9 +131,10 @@ export class MessageService {
         controller.signal.aborted ||
         !this.eligible(message) ||
         this.config.revision !== revision ||
-        !this.canSend(message)
+        !this.canSend(message) ||
+        (automatic && !this.freshForAutoReply(message))
       )
-        return;
+        return false;
       // Check deletion once more after generation; failIfNotExists prevents orphaned replies.
       await message.reply({
         content: output,
@@ -150,11 +142,13 @@ export class MessageService {
         failIfNotExists: true,
       });
       this.memory.add(message.channelId, message.author.id, input, output, config.context);
+      return true;
     } catch (error) {
       if (!controller?.signal.aborted) {
         this.logger.warn({ ...errorDetails(error), automatic }, 'Chat request failed');
         if (!automatic && this.eligible(message)) await this.notice(message, publicError(error));
       }
+      return false;
     } finally {
       if (controller && this.inFlight.get(message.channelId) === controller)
         this.inFlight.delete(message.channelId);
@@ -177,13 +171,11 @@ export class MessageService {
   }
 
   configurationChanged(): void {
-    this.scheduler.clear();
     for (const controller of this.inFlight.values()) controller.abort();
     this.memory.forget();
   }
 
   userIgnored(userId: string): void {
-    this.scheduler.cancelUser(userId);
     this.memory.forgetUser(userId);
     // Abort active requests because their prompts may include the newly ignored user.
     for (const controller of this.inFlight.values()) controller.abort();
@@ -191,7 +183,6 @@ export class MessageService {
 
   forget(channelId: string): void {
     this.inFlight.get(channelId)?.abort();
-    this.scheduler.cancel(channelId);
     this.memory.forget(channelId);
   }
 

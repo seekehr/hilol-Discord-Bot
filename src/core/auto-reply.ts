@@ -1,57 +1,45 @@
-export interface AutoCandidate {
-  channelId: string;
-  messageId: string;
-  userId: string;
-  createdAt: number;
-}
-interface Pending {
-  candidate: AutoCandidate;
-  timer: ReturnType<typeof setTimeout>;
+export const MAX_AUTO_MESSAGE_AGE_SECONDS = 120;
+
+export function isFreshAutoMessage(
+  createdAt: number,
+  maxAgeSeconds: number,
+  now = Date.now(),
+): boolean {
+  const age = now - createdAt;
+  return age >= 0 && age <= Math.min(maxAgeSeconds, MAX_AUTO_MESSAGE_AGE_SECONDS) * 1_000;
 }
 
-// A fixed window coalesces activity; new messages update the candidate without postponing the timer.
-export class AutoReplyScheduler {
-  private readonly pending = new Map<string, Pending>();
+// React only to arriving messages. Nothing is queued or sent when a cooldown expires.
+export class AutoReplyCooldown {
+  private readonly nextAllowedAt = new Map<string, number>();
+  private readonly active = new Set<string>();
 
   constructor(
-    private readonly deliver: (candidate: AutoCandidate) => Promise<void>,
-    private readonly onError: (error: unknown) => void,
+    private readonly now = Date.now,
     private readonly random = Math.random,
   ) {}
 
-  schedule(candidate: AutoCandidate, minSeconds: number, maxSeconds: number): void {
-    const existing = this.pending.get(candidate.channelId);
-    if (existing) {
-      existing.candidate = candidate;
-      return;
+  remainingSeconds(channelId: string): number {
+    return Math.max(0, Math.ceil(((this.nextAllowedAt.get(channelId) ?? 0) - this.now()) / 1_000));
+  }
+
+  async run(
+    channelId: string,
+    minSeconds: number,
+    maxSeconds: number,
+    reply: () => Promise<boolean>,
+  ): Promise<void> {
+    for (const [id, until] of this.nextAllowedAt)
+      if (until <= this.now()) this.nextAllowedAt.delete(id);
+    if (this.active.has(channelId) || this.remainingSeconds(channelId) > 0) return;
+    this.active.add(channelId);
+    try {
+      if (await reply()) {
+        const seconds = minSeconds + this.random() * (maxSeconds - minSeconds);
+        this.nextAllowedAt.set(channelId, this.now() + seconds * 1_000);
+      }
+    } finally {
+      this.active.delete(channelId);
     }
-    const milliseconds = (minSeconds + this.random() * (maxSeconds - minSeconds)) * 1_000;
-    const pending: Pending = {
-      candidate,
-      timer: setTimeout(() => {
-        this.pending.delete(candidate.channelId);
-        void this.deliver(pending.candidate).catch(this.onError);
-      }, milliseconds),
-    };
-    pending.timer.unref();
-    this.pending.set(candidate.channelId, pending);
-  }
-
-  cancel(channelId: string): void {
-    const pending = this.pending.get(channelId);
-    if (pending) clearTimeout(pending.timer);
-    this.pending.delete(channelId);
-  }
-
-  cancelUser(userId: string): void {
-    for (const [id, pending] of this.pending)
-      if (pending.candidate.userId === userId) this.cancel(id);
-  }
-
-  clear(): void {
-    for (const id of this.pending.keys()) this.cancel(id);
-  }
-  get size(): number {
-    return this.pending.size;
   }
 }

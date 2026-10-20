@@ -1,6 +1,6 @@
 # Hilol Discord Bot
 
-A TypeScript chatbot for your Discord server, powered by Groq. It answers mentions and replies, and joins conversations in a chosen channel after a random 5–10 minute delay. It won't ping anyone.
+A TypeScript chatbot for your Discord server, powered by Groq. It answers mentions and replies, and responds immediately to new messages in a chosen channel when ready, with a random 10–15 minute cooldown between automatic replies. It won't ping anyone.
 
 Includes editable personality, per-user rate limits, timed ignores, and interactive setup. Built for one server per bot instance.
 
@@ -21,6 +21,8 @@ npm start
 ```
 
 Run `/setup` in Discord to choose a channel, personality, and timing. Automatic replies stay off until you select a channel.
+
+Automatic replies only target messages at most two minutes old. Messages during cooldown are skipped, not queued; once it's over, the next fresh message gets a reply. Mentions and replies to the bot bypass this cooldown.
 
 ## Commands
 
@@ -55,6 +57,6 @@ docker compose up -d
 
 No inbound ports are needed. Settings stay in `config/`; ignore timers and API budgets persist in a Docker volume. Run one instance at a time. A [systemd service](deploy/hilol.service) is also included; it expects `/opt/hilol`, a `hilol` user, and writable `config/` and `data/` directories.
 
-Conversation context stays in memory per channel and is sent to Groq when generating replies. Restarts clear context and pending replies; ignores and API budgets survive.
+Conversation context stays in memory per channel and is sent to Groq when generating replies. Restarts clear context and auto-reply cooldowns; ignores and API budgets survive.
 
 For development, use `npm run dev`. Run `npm run check` to check types, tests, formatting, and the build.
