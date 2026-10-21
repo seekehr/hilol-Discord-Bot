@@ -1,0 +1,93 @@
+name: Deploy to Oracle
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Finish an in-progress deployment before starting another one.
+concurrency:
+  group: oracle-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Manual runs on other branches must not get deployment credentials.
+    if: github.ref == 'refs/heads/main'
+    # Match the existing Ubuntu 24.04 x86_64 VM when packaging dependencies.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Check and build
+        run: |
+          npm ci
+          npm run check
+
+      - name: Package production runtime
+        run: |
+          npm ci --omit=dev --no-audit --no-fund
+          tar -czf "$RUNNER_TEMP/hilol-release.tgz" \
+            dist node_modules package.json package-lock.json \
+            config/preconfigured_message_responses.json
+
+      - name: Upload and deploy
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing Actions secret: $name"
+              exit 1
+            fi
+          done
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+
+          credentials=$(mktemp -d)
+          trap 'rm -rf -- "$credentials"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$credentials/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$credentials/known_hosts"
+          chmod 600 "$credentials/key" "$credentials/known_hosts"
+          ssh-keygen -y -P '' -f "$credentials/key" > /dev/null
+
+          target="${SSH_USER}@${SSH_HOST}"
+          opts=(-i "$credentials/key"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$credentials/known_hosts"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4)
+
+          remote_dir=$(ssh "${opts[@]}" "$target" \
+            'umask 077; mktemp -d /tmp/hilol-deploy.XXXXXXXX')
+          [[ "$remote_dir" =~ ^/tmp/hilol-deploy\.[a-zA-Z0-9]+$ ]]
+          if ! scp "${opts[@]}" "$RUNNER_TEMP/hilol-release.tgz" \
+            "$target:$remote_dir/release.tgz"; then
+            ssh "${opts[@]}" "$target" "rm -rf -- '$remote_dir'" || true
+            exit 1
+          fi
+          checksum=$(sha256sum "$RUNNER_TEMP/hilol-release.tgz" | cut -d ' ' -f 1)
+          ssh "${opts[@]}" "$target" "bash -se -- '$remote_dir' '$checksum'" \
+            < deploy/oracle-deploy.sh
