@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { MessageFlags, type Client, type Interaction } from 'discord.js';
 import pino from 'pino';
 import { ConfigStore } from '../src/config/store.js';
@@ -26,6 +27,7 @@ async function fixture() {
     autoReplyReadyInSeconds: 0,
   };
   const client = { ws: { ping: 25 }, channels: { fetch: vi.fn() }, user: { id: 'bot' } };
+  const shutdown = vi.fn();
   const service = new InteractionService(
     client as unknown as Client,
     guildId,
@@ -33,8 +35,9 @@ async function fixture() {
     state,
     messages as unknown as MessageService,
     pino({ level: 'silent' }),
+    shutdown,
   );
-  return { config, state, messages, service, client };
+  return { config, state, messages, service, client, shutdown };
 }
 
 function command(name: string, admin = true) {
@@ -72,6 +75,56 @@ function command(name: string, admin = true) {
 }
 
 describe('owner-only interactions', () => {
+  it('acknowledges an owner stop privately before shutting down', async () => {
+    const f = await fixture();
+    const interaction = command('stop', false);
+    interaction.editReply.mockImplementation(async () => {
+      expect(f.shutdown).not.toHaveBeenCalled();
+    });
+
+    await f.service.handle(interaction as unknown as Interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.stringContaining('Control Oracle bot'),
+    );
+    expect(f.shutdown).toHaveBeenCalledOnce();
+    expect(f.config.current.enabled).toBe(true);
+  });
+
+  it('keeps running if the stop acknowledgement could not be delivered', async () => {
+    const f = await fixture();
+    const interaction = command('stop');
+    interaction.editReply.mockRejectedValue(new Error('Disconnected'));
+
+    await f.service.handle(interaction as unknown as Interaction);
+
+    expect(f.shutdown).not.toHaveBeenCalled();
+  });
+
+  it('shows deployed package metadata privately to owners without guild privileges', async () => {
+    const f = await fixture();
+    const interaction = command('about', false);
+    const metadata = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { name: string; version: string; description: string };
+
+    await f.service.handle(interaction as unknown as Interaction);
+
+    expect(commands.some((command) => command.name === 'about')).toBe(true);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining(`Version: \`${metadata.version}\``),
+      allowedMentions: { parse: [] },
+    });
+    const response = interaction.editReply.mock.calls[0]![0] as { content: string };
+    expect(response.content).toContain(metadata.name);
+    expect(response.content).toContain(metadata.description);
+    expect(response.content).toContain('Git commit:');
+    expect(response.content).toContain(process.version);
+    expect(f.messages.configurationChanged).not.toHaveBeenCalled();
+  });
+
   it('denies non-owners even with guild permissions, including old setup buttons', async () => {
     const f = await fixture();
     const interaction = command('config');
@@ -172,6 +225,7 @@ describe('owner-only interactions', () => {
     expect(interaction.deferReply).not.toHaveBeenCalled();
     expect(interaction.showModal).not.toHaveBeenCalled();
     expect(f.messages.configurationChanged).not.toHaveBeenCalled();
+    expect(f.shutdown).not.toHaveBeenCalled();
   });
 
   it.each(['button', 'channelSelect', 'modal'])(

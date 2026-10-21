@@ -1,6 +1,6 @@
 {
   "name": "hilol-discord-bot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "A configurable, single-server Discord chatbot powered by Groq",
   "type": "module",

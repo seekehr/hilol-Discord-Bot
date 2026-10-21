@@ -5,6 +5,10 @@ manually from the Actions tab on `main`. Pull requests do not run this workflow.
 Checks and compilation run on GitHub; Oracle only receives the built runtime and
 production dependencies.
 
+The package includes `dist/build-info.json` with the workflow's exact commit SHA.
+`/about` shows that deployed commit even though the server has no Git checkout.
+The metadata is part of `dist/`, so runtime rollback restores it too.
+
 ## One-time prerequisites
 
 - The existing `hilol` systemd service is installed and working at `/opt/hilol`,
@@ -53,3 +57,24 @@ not rolled back. Abrupt VM shutdowns or forced process kills can prevent rollbac
 
 The workflow does not update the systemd unit automatically. Changes to
 `deploy/hilol.service` require a separate server update.
+
+## Start and stop without SSH
+
+After deploying these changes, configured owners can use `/stop` in Discord. It
+acknowledges privately, cancels active replies, closes the Discord connection, and
+lets the process exit cleanly. The existing `Restart=on-failure` service leaves a
+cleanly stopped process offline. `/stop` affects whichever instance receives the
+command, so stop Oracle before starting a local copy with the same token.
+
+To start it again, open **Actions → Control Oracle bot → Run workflow**, leave the
+branch on `main`, choose `start`, and run it. The same menu offers `stop`, `restart`,
+and `status`, using the four SSH secrets already configured. This workflow operates
+the existing service without building or uploading a new release. Start/restart
+checks that the same service process stays active for five seconds; use `/status`
+in Discord to check application health.
+
+GitHub service controls require repository write access; Discord commands require
+membership in `ownerIds`. No server privileges or GitHub token are given to the bot.
+Deployment and service control share the same concurrency group and server lock.
+Stopping does not disable boot startup: a server reboot, a new deployment, or a
+manual start can bring the bot online again.

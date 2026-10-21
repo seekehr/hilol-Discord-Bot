@@ -42,6 +42,7 @@ jobs:
       - name: Package production runtime
         run: |
           npm ci --omit=dev --no-audit --no-fund
+          printf '{"commit":"%s"}\n' "$GITHUB_SHA" > dist/build-info.json
           tar -czf "$RUNNER_TEMP/hilol-release.tgz" \
             dist node_modules package.json package-lock.json \
             config/preconfigured_message_responses.json

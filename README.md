@@ -39,15 +39,17 @@ Automatic replies only target messages at most two minutes old. Messages during 
 
 ## Commands
 
-| Command                                         | What it does                                    |
-| ----------------------------------------------- | ----------------------------------------------- |
-| `/setup`                                        | Open the setup panel                            |
-| `/personality`                                  | Edit the bot's personality                      |
-| `/config show`, `/config set`, `/config reload` | View, change, or reload settings                |
-| `/ignore user:@someone time:2h`                 | Ignore someone's messages and pings temporarily |
-| `/unignore user:@someone`                       | Remove an ignore                                |
-| `/forget`                                       | Clear this channel's bot context                |
-| `/status`, `/help`                              | Check usage or get help                         |
+| Command                                         | What it does                                                |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| `/setup`                                        | Open the setup panel                                        |
+| `/personality`                                  | Edit the bot's personality                                  |
+| `/config show`, `/config set`, `/config reload` | View, change, or reload settings                            |
+| `/ignore user:@someone time:2h`                 | Ignore someone's messages and pings temporarily             |
+| `/unignore user:@someone`                       | Remove an ignore                                            |
+| `/forget`                                       | Clear this channel's bot context                            |
+| `/status`, `/help`                              | Check usage or get help                                     |
+| `/about`                                        | Show package version, Git commit, and runtime               |
+| `/stop`                                         | Shut down this instance; start again through GitHub Actions |
 
 Every command and setup control is restricted to `ownerIds`, including `/help` and `/status`. An empty list disables command access; server admins get no bypass. Owners don't need Manage Server. Discord may still show commands to others; use Server Settings → Integrations to hide them if desired. Ignore durations accept `s`, `m`, `h`, or `d`, up to `365d`.
 

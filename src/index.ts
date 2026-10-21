@@ -47,14 +47,6 @@ async function main(): Promise<void> {
     new PreconfiguredResponses(),
     () => messageClock.now(),
   );
-  const interactions = new InteractionService(
-    client,
-    env.DISCORD_GUILD_ID,
-    config,
-    state,
-    messages,
-    logger,
-  );
   const clockRefresh = setInterval(() => {
     void messageClock
       .synchronize(env.DISCORD_TOKEN)
@@ -66,6 +58,24 @@ async function main(): Promise<void> {
       );
   }, 5 * 60_000);
   clockRefresh.unref();
+  let stopping = false;
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    logger.info('Shutting down');
+    messages.stop();
+    clearInterval(clockRefresh);
+    client.destroy();
+  };
+  const interactions = new InteractionService(
+    client,
+    env.DISCORD_GUILD_ID,
+    config,
+    state,
+    messages,
+    logger,
+    stop,
+  );
   client.on(Events.MessageCreate, (message) => {
     void messages
       .handle(message)
@@ -91,15 +101,6 @@ async function main(): Promise<void> {
     }
     logger.info({ bot: ready.user.tag, model: config.current.ai.model }, 'Bot ready');
   });
-  let stopping = false;
-  const stop = () => {
-    if (stopping) return;
-    stopping = true;
-    logger.info('Shutting down');
-    messages.stop();
-    clearInterval(clockRefresh);
-    client.destroy();
-  };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {

@@ -43,5 +43,7 @@ export const commands = [
   ),
   ownerCommand('forget', 'Clear the bot’s in-memory context for this channel'),
   ownerCommand('status', 'Show bot health and local API budget usage'),
+  ownerCommand('about', 'Show the bot version, project details, and Node.js runtime'),
+  ownerCommand('stop', 'Shut down this bot instance; start Oracle again through GitHub Actions'),
   ownerCommand('help', 'Show bot commands and settings usage'),
 ].map((command) => command.toJSON());

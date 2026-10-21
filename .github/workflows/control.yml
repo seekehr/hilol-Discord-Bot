@@ -1,0 +1,97 @@
+name: Control Oracle bot
+run-name: Oracle bot ${{ inputs.action }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Service action
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+          - restart
+
+# No checkout or GitHub API access is needed to operate the existing service.
+permissions: {}
+
+concurrency:
+  group: oracle-production
+  cancel-in-progress: false
+
+jobs:
+  control:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Control service over SSH
+        shell: bash
+        env:
+          BOT_ACTION: ${{ inputs.action }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          case "$BOT_ACTION" in
+            start|stop|restart|status) ;;
+            *) echo '::error::Invalid service action'; exit 1 ;;
+          esac
+          for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing Actions secret: $name"
+              exit 1
+            fi
+          done
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          credentials=$(mktemp -d)
+          trap 'rm -rf -- "$credentials"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$credentials/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$credentials/known_hosts"
+          chmod 600 "$credentials/key" "$credentials/known_hosts"
+          ssh-keygen -y -P '' -f "$credentials/key" > /dev/null
+          opts=(-i "$credentials/key"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$credentials/known_hosts"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4)
+
+          ssh "${opts[@]}" "${SSH_USER}@${SSH_HOST}" "bash -se -- '$BOT_ACTION'" <<'REMOTE'
+          set -euo pipefail
+          action=$1
+          case "$action" in
+            start|stop|restart|status) ;;
+            *) exit 1 ;;
+          esac
+          exec 9> "$HOME/.hilol-deploy.lock"
+          flock -w 120 9
+          sudo -n systemctl cat hilol > /dev/null
+          case "$action" in
+            start|restart)
+              sudo -n systemctl reset-failed hilol
+              sudo -n systemctl "$action" hilol
+              invocation=$(sudo -n systemctl show hilol --property=InvocationID --value)
+              test -n "$invocation"
+              sleep 5
+              sudo -n systemctl is-active --quiet hilol
+              [[ "$(sudo -n systemctl show hilol --property=InvocationID --value)" == "$invocation" ]]
+              echo 'Service is running. Use /status in Discord to check the bot.'
+              ;;
+            stop)
+              sudo -n systemctl stop hilol
+              [[ "$(sudo -n systemctl show hilol --property=ActiveState --value)" == inactive ]]
+              echo 'Bot service stopped.'
+              ;;
+          esac
+          sudo -n systemctl show hilol \
+            --property=ActiveState --property=SubState --property=ExecMainStatus
+          REMOTE

@@ -5,6 +5,7 @@ import {
   type Client,
   type Interaction,
 } from 'discord.js';
+import { createRequire } from 'node:module';
 import type { ConfigStore } from '../config/store.js';
 import type { StateStore } from '../storage/state-store.js';
 import type { MessageService } from './message-service.js';
@@ -12,6 +13,14 @@ import type { Logger } from 'pino';
 import { setupPanel, personalityModal } from './setup.js';
 import { parseDuration } from '../core/time.js';
 import { UserError, publicError, errorDetails } from '../core/errors.js';
+import { gitCommit } from '../core/build-info.js';
+
+// This path works from both src/discord and the deployed dist/discord directory.
+const packageInfo = createRequire(import.meta.url)('../../package.json') as {
+  name: string;
+  version: string;
+  description: string;
+};
 
 export class InteractionService {
   constructor(
@@ -21,6 +30,7 @@ export class InteractionService {
     private readonly state: StateStore,
     private readonly messages: MessageService,
     private readonly logger: Logger,
+    private readonly shutdown: () => void,
   ) {}
 
   async handle(interaction: Interaction): Promise<void> {
@@ -114,9 +124,21 @@ export class InteractionService {
             });
             return;
           }
+          case 'stop':
+            await interaction.editReply(
+              'Shutting down this bot instance. To start Oracle again, use GitHub Actions → Control Oracle bot → Run workflow → start.',
+            );
+            this.shutdown();
+            return;
+          case 'about':
+            await interaction.editReply({
+              content: `**${packageInfo.name}**\n${packageInfo.description}\n\nVersion: \`${packageInfo.version}\`\nGit commit: \`${gitCommit() ?? 'unavailable'}\`\nNode.js: \`${process.version}\``,
+              allowedMentions: { parse: [] },
+            });
+            return;
           case 'help':
             await interaction.editReply(
-              'Mention me or reply to one of my messages to chat. In the selected channel I answer new messages immediately when ready, with a random 10–15 minute cooldown between automatic replies. Messages older than two minutes are skipped. I never ping anyone.\n\nBot owners: /setup, /personality, /config show|set|reload, /ignore user time, /unignore user, /forget.\nExamples: `/ignore @user 2h`, `/config set path:ai.model value:openai/gpt-oss-20b`, `/config set path:enabled value:false`.\n\nConversation context is shared within each channel, kept in memory temporarily, and sent to Groq when generating replies. Ignored users receive no chat responses.',
+              'Mention me or reply to one of my messages to chat. In the selected channel I answer new messages immediately when ready, with a random 10–15 minute cooldown between automatic replies. Messages older than two minutes are skipped. I never ping anyone.\n\nBot owners: /setup, /personality, /config show|set|reload, /ignore user time, /unignore user, /forget, /status, /about, /stop, /help.\nExamples: `/ignore @user 2h`, `/config set path:ai.model value:openai/gpt-oss-20b`, `/config set path:enabled value:false`.\n\n/stop shuts down this instance. Use GitHub Actions → Control Oracle bot to start the server copy again.\n\nConversation context is shared within each channel, kept in memory temporarily, and sent to Groq when generating replies. Ignored users receive no chat responses.',
             );
             return;
           default:
