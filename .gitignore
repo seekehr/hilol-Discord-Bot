@@ -1,8 +1,6 @@
 node_modules/
 dist/
 coverage/
-.env
-.env.*
 !.env.example
 # SSH identities, cryptographic keys, and keystores.
 .ssh/
@@ -34,6 +32,6 @@ data/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
 # Shared canned replies belong in Git, unlike local bot settings.
 !config/preconfigured_message_responses.json
+config.bat
