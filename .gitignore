@@ -4,6 +4,26 @@ coverage/
 .env
 .env.*
 !.env.example
+# SSH identities, cryptographic keys, and keystores.
+.ssh/
+.gnupg/
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+id_xmss*
+*.key
+*.pem
+*.pub
+*.ppk
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.der
+*.gpg
+*.pgp
+*.asc
 config/*.json
 !config/*.example.json
 config/*.txt
