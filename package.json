@@ -8,9 +8,9 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "dev": "node init && tsx watch src/index.ts",
+    "build": "node init && tsc -p tsconfig.json",
+    "start": "node init && node dist/index.js",
     "commands:register": "tsx src/register-commands.ts",
     "config:check": "tsx src/check-config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
@@ -23,6 +23,7 @@
     "discord.js": "^14.27.0",
     "dotenv": "^17.2.3",
     "gpt-tokenizer": "^4.1.0",
+    "node-fetch": "^3.3.2",
     "pino": "^10.0.0",
     "zod": "^4.0.0"
   },
