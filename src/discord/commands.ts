@@ -8,7 +8,6 @@ const ownerCommand = (name: string, description: string) =>
     .setDefaultMemberPermissions(null);
 
 export const commands = [
-  ownerCommand('setup', 'Open the interactive bot setup panel'),
   ownerCommand('config', 'View or change bot settings')
     .addSubcommand((c) => c.setName('show').setDescription('Download the current configuration'))
     .addSubcommand((c) =>
@@ -18,7 +17,7 @@ export const commands = [
         .addStringOption((o) =>
           o
             .setName('path')
-            .setDescription('For example: ai.model or autoReply.enabled')
+            .setDescription('For example: enabled or corrections.minConfidence')
             .setRequired(true),
         )
         .addStringOption((o) =>
@@ -30,20 +29,18 @@ export const commands = [
         ),
     )
     .addSubcommand((c) =>
-      c.setName('reload').setDescription('Validate and reload the config file from disk'),
+      c.setName('reload').setDescription('Validate and reload the config files from disk'),
     ),
-  ownerCommand('personality', 'Edit the bot personality in a text editor'),
-  ownerCommand('ignore', 'Temporarily ignore someone’s messages and mentions')
+  ownerCommand('ignore', 'Temporarily stop fact-checking someone’s messages')
     .addUserOption((o) => o.setName('user').setDescription('User to ignore').setRequired(true))
     .addStringOption((o) =>
       o.setName('time').setDescription('Examples: 10m, 2h, 7d; maximum 365d').setRequired(true),
     ),
-  ownerCommand('unignore', 'Stop ignoring a user').addUserOption((o) =>
+  ownerCommand('unignore', 'Resume fact-checking a user').addUserOption((o) =>
     o.setName('user').setDescription('User to unignore').setRequired(true),
   ),
-  ownerCommand('forget', 'Clear the bot’s in-memory context for this channel'),
-  ownerCommand('status', 'Show bot health and local API budget usage'),
-  ownerCommand('about', 'Show the bot version, project details, and Node.js runtime'),
+  ownerCommand('status', 'Show fact-checking activity and local API budget usage'),
+  ownerCommand('about', 'Show the bot version, author, and Node.js runtime'),
   ownerCommand('stop', 'Shut down this bot instance; start Oracle again through GitHub Actions'),
-  ownerCommand('help', 'Show bot commands and settings usage'),
+  ownerCommand('help', 'Show how the bot works and its commands'),
 ].map((command) => command.toJSON());

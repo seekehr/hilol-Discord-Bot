@@ -1,49 +1,48 @@
 {
   "ownerIds": [],
   "enabled": true,
-  "promptFile": "prompt.txt",
-  "triggers": {
-    "mentions": true,
-    "replies": true,
-    "directChannelIds": [],
-    "excludedChannelIds": []
+  "promptFile": "factcheck.txt",
+  "channels": {
+    "include": [],
+    "exclude": []
   },
-  "autoReply": {
-    "enabled": false,
-    "channelId": null,
-    "minIntervalSeconds": 600,
-    "maxIntervalSeconds": 900,
-    "maxMessageAgeSeconds": 120
+  "screening": {
+    "batchSize": 10,
+    "maxWaitSeconds": 30,
+    "minMessageChars": 20,
+    "maxMessageChars": 1500,
+    "maxQueuedMessages": 100,
+    "maxMessageAgeSeconds": 600,
+    "userChecksPerMinute": 6
+  },
+  "corrections": {
+    "minConfidence": 0.85,
+    "channelCooldownSeconds": 60,
+    "maxPerBatch": 2,
+    "contextMessages": 4
   },
   "ai": {
-    "model": "openai/gpt-oss-20b",
-    "temperature": 0.7,
-    "maxOutputTokens": 512,
-    "timeoutMs": 30000,
-    "maxRetries": 1,
-    "maxConcurrentRequests": 2
-  },
-  "context": {
-    "maxMessages": 12,
-    "maxInputChars": 1200,
-    "maxHistoryChars": 2000,
-    "ttlSeconds": 3600,
-    "maxChannels": 100
+    "screenModel": "openai/gpt-oss-20b",
+    "verifyModel": "openai/gpt-oss-120b",
+    "webSearch": true,
+    "screenMaxOutputTokens": 400,
+    "verifyMaxOutputTokens": 1500,
+    "searchTokenAllowance": 3000,
+    "timeoutMs": 60000,
+    "maxRetries": 1
   },
   "rateLimits": {
-    "userRequests": 30,
-    "userWindowSeconds": 60,
-    "userCooldownSeconds": 0,
-    "requestsPerMinute": 30,
-    "requestsPerDay": 1000,
-    "tokensPerMinute": 8000,
-    "tokensPerDay": 200000,
-    "errorNoticeCooldownSeconds": 30,
-    "messages": {
-      "user": "You are chatting too quickly. Please try again in {retryAfterSeconds}s.",
-      "minute": "The bot has reached its minute API budget ({resource}). Please try again in {retryAfterSeconds}s.",
-      "day": "The bot has reached its daily API budget ({resource}). Please try again in {retryAfterSeconds}s.",
-      "provider": "Groq is cooling down after a rate limit. Please try again in {retryAfterSeconds}s."
+    "screen": {
+      "requestsPerMinute": 30,
+      "requestsPerDay": 1000,
+      "tokensPerMinute": 8000,
+      "tokensPerDay": 200000
+    },
+    "verify": {
+      "requestsPerMinute": 30,
+      "requestsPerDay": 1000,
+      "tokensPerMinute": 8000,
+      "tokensPerDay": 200000
     }
   }
 }

@@ -1,64 +1,65 @@
 import { describe, it, expect, vi } from 'vitest';
-import { GroqProvider, retryAfterMilliseconds } from '../src/ai/groq.js';
+import { GroqProvider, retryAfterMilliseconds, type CompletionRequest } from '../src/ai/groq.js';
 import { StateStore } from '../src/storage/state-store.js';
 import { defaultConfig } from '../src/config/schema.js';
 import { temporaryPath } from './helpers.js';
 
-const prompt = [{ role: 'user' as const, content: 'Hello' }];
+const screen: CompletionRequest = {
+  pool: 'screen',
+  model: 'openai/gpt-oss-20b',
+  messages: [{ role: 'user', content: 'Hello' }],
+  maxOutputTokens: 400,
+  json: true,
+};
+const verify: CompletionRequest = {
+  ...screen,
+  pool: 'verify',
+  model: 'openai/gpt-oss-120b',
+  webSearch: { extraTokens: 3_000 },
+};
 async function stateStore() {
   const state = new StateStore(await temporaryPath());
   await state.load();
   return state;
 }
+const body = (request: ReturnType<typeof vi.fn<typeof fetch>>, call = 0) =>
+  JSON.parse(String(request.mock.calls[call]![1]?.body)) as Record<string, unknown>;
 
 describe('Groq transport', () => {
-  it('supports repeated short chats by replacing reservations with real Groq usage', async () => {
+  it('sends JSON mode for screening and records usage against the screening budget', async () => {
     const state = await stateStore();
-    const request = vi.fn<typeof fetch>().mockImplementation(async () =>
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({
-        choices: [{ message: { content: 'Hello!' } }],
-        usage: { prompt_tokens: 350, completion_tokens: 50, total_tokens: 400 },
+        choices: [{ message: { content: ' {"check":[]} ' } }],
+        usage: { total_tokens: 400 },
       }),
     );
     const provider = new GroqProvider('test-secret', state, request);
-    const messages = [
-      { role: 'system' as const, content: 'You are a friendly Discord companion. '.repeat(60) },
-      ...prompt,
-    ];
-    for (let i = 0; i < 10; i++)
-      await expect(provider.complete(messages, defaultConfig)).resolves.toBe('Hello!');
-    expect(request).toHaveBeenCalledTimes(10);
-    expect(state.usage().reservedTokens).toBe(4_000);
-    expect(state.usage().requests).toBe(10);
-  });
-
-  it('accounts for real usage even if reasoning exhausts the output budget and content is empty', async () => {
-    const state = await stateStore();
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ choices: [], usage: { total_tokens: 300 } }));
-    const provider = new GroqProvider('test-secret', state, request);
-    await expect(provider.complete(prompt, defaultConfig)).rejects.toThrow('empty reply');
-    expect(state.usage().reservedTokens).toBe(300);
-  });
-  it('sends bounded chat settings and extracts the reply', async () => {
-    const state = await stateStore();
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ choices: [{ message: { content: ' Hello there ' } }] }));
-    const provider = new GroqProvider('test-secret', state, request);
-    expect(await provider.complete(prompt, defaultConfig)).toBe('Hello there');
-    const [url, init] = request.mock.calls[0]!;
-    expect(url).toBe('https://api.groq.com/openai/v1/chat/completions');
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      model: defaultConfig.ai.model,
+    expect(await provider.complete(screen, defaultConfig)).toBe('{"check":[]}');
+    expect(request.mock.calls[0]![0]).toBe('https://api.groq.com/openai/v1/chat/completions');
+    expect(body(request)).toMatchObject({
+      model: 'openai/gpt-oss-20b',
       reasoning_effort: 'low',
-      max_completion_tokens: 512,
+      max_completion_tokens: 400,
+      response_format: { type: 'json_object' },
     });
-    expect(state.usage().requests).toBe(1);
+    expect(body(request)).not.toHaveProperty('tools');
+    expect(state.usage('screen')).toMatchObject({ requests: 1, reservedTokens: 400 });
+    expect(state.usage('verify').requests).toBe(0);
   });
 
-  it('honors 429 Retry-After and blocks subsequent requests locally', async () => {
+  it('enables browser search without JSON mode and reserves the search allowance', async () => {
+    const state = await stateStore();
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' } }] }));
+    await new GroqProvider('test-secret', state, request).complete(verify, defaultConfig);
+    expect(body(request)).toMatchObject({ tools: [{ type: 'browser_search' }] });
+    expect(body(request)).not.toHaveProperty('response_format');
+    expect(state.usage('verify').reservedTokens).toBeGreaterThan(3_400);
+  });
+
+  it('honors 429 Retry-After per model and blocks later requests locally', async () => {
     const state = await stateStore();
     const request = vi
       .fn<typeof fetch>()
@@ -66,9 +67,9 @@ describe('Groq transport', () => {
         new Response('sensitive body', { status: 429, headers: { 'retry-after': '120' } }),
       );
     const provider = new GroqProvider('test-secret', state, request);
-    await expect(provider.complete(prompt, defaultConfig)).rejects.toThrow('rate limit');
-    expect(state.usage().blockedUntil).toBeGreaterThan(Date.now() + 119_000);
-    await expect(provider.complete(prompt, defaultConfig)).rejects.toThrow('cooling down');
+    await expect(provider.complete(verify, defaultConfig)).rejects.toThrow('rate limit');
+    expect(state.usage('verify').blockedUntil).toBeGreaterThan(Date.now() + 119_000);
+    await expect(provider.complete(verify, defaultConfig)).rejects.toThrow('cooling down');
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -79,52 +80,29 @@ describe('Groq transport', () => {
       .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
       .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: 'Recovered' } }] }));
     const provider = new GroqProvider('test-secret', state, request);
-    expect(await provider.complete(prompt, defaultConfig)).toBe('Recovered');
-    expect(state.usage().requests).toBe(2);
+    expect(await provider.complete(screen, defaultConfig)).toBe('Recovered');
+    expect(state.usage('screen').requests).toBe(2);
   });
 
-  it('does not leak provider errors and rejects empty replies', async () => {
+  it('does not leak provider errors and rejects empty or malformed replies', async () => {
     const state = await stateStore();
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(new Response('secret detail', { status: 401 }))
-      .mockResolvedValueOnce(Response.json({ choices: [] }));
+      .mockResolvedValueOnce(Response.json({ choices: [], usage: { total_tokens: 300 } }))
+      .mockResolvedValueOnce(new Response('not json'))
+      .mockRejectedValueOnce(new Error('secret transport detail'));
     const provider = new GroqProvider('test-secret', state, request);
-    await expect(provider.complete(prompt, defaultConfig)).rejects.toThrow('Groq access failed');
-    await expect(provider.complete(prompt, defaultConfig)).rejects.toThrow('empty reply');
+    const config = { ...defaultConfig, ai: { ...defaultConfig.ai, maxRetries: 0 } };
+    await expect(provider.complete(screen, config)).rejects.toThrow('Groq access failed');
+    await expect(provider.complete(screen, config)).rejects.toThrow('empty reply');
+    await expect(provider.complete(screen, config)).rejects.toThrow('unreadable response');
+    await expect(provider.complete(screen, config)).rejects.toThrow('could not be reached');
   });
 
   it('parses both Retry-After formats', () => {
     expect(retryAfterMilliseconds('10', 0)).toBe(10_000);
     expect(retryAfterMilliseconds('Thu, 01 Jan 1970 00:02:00 GMT', 60_000)).toBe(60_000);
     expect(retryAfterMilliseconds('invalid', 0)).toBe(60_000);
-  });
-
-  it('caps emoji-heavy replies to Discord UTF-16 limits without splitting characters', async () => {
-    const state = await stateStore();
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({ choices: [{ message: { content: 'x' + '😀'.repeat(2_000) } }] }),
-      );
-    const output = await new GroqProvider('test-secret', state, request).complete(
-      prompt,
-      defaultConfig,
-    );
-    expect(output.length).toBeLessThanOrEqual(1_900);
-    expect(output.isWellFormed()).toBe(true);
-  });
-
-  it('rejects malformed responses and handles network timeouts without exposing internals', async () => {
-    const state = await stateStore();
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response('not json'))
-      .mockRejectedValueOnce(new Error('secret transport detail'));
-    const provider = new GroqProvider('test-secret', state, request);
-    const config = { ...defaultConfig, ai: { ...defaultConfig.ai, maxRetries: 0 } };
-    await expect(provider.complete(prompt, config)).rejects.toThrow('unreadable response');
-    await expect(provider.complete(prompt, config)).rejects.toThrow('could not be reached in time');
-    expect(state.usage().requests).toBe(2);
   });
 });

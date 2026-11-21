@@ -27,7 +27,6 @@ id_xmss*
 config/*.json
 !config/*.example.json
 config/*.txt
-!config/*.example.txt
 data/
 *.log
 *.tmp
@@ -35,5 +34,3 @@ data/
 Thumbs.db
 .idea/
 .vscode/
-# Shared canned replies belong in Git, unlike local bot settings.
-!config/preconfigured_message_responses.json

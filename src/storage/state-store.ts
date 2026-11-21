@@ -2,25 +2,56 @@ import { z } from 'zod';
 import { readJson, writeJson, SerialQueue } from './json-file.js';
 import { randomUUID } from 'node:crypto';
 import { RateLimitError } from '../core/rate-limit-error.js';
-import type { BotConfig } from '../config/schema.js';
+import type { BotConfig, BudgetPool } from '../config/schema.js';
 
+const pools = ['screen', 'verify'] as const satisfies readonly BudgetPool[];
+const poolSchema = z.enum(pools);
+const ignoresSchema = z.record(z.string().regex(/^\d{17,20}$/), z.number().finite().nonnegative());
+const reservationSchema = z.strictObject({
+  id: z.string().uuid().optional(),
+  pool: poolSchema,
+  at: z.number().finite().nonnegative(),
+  tokens: z.number().int().nonnegative(),
+});
 const stateSchema = z.strictObject({
+  version: z.literal(2),
+  ignores: ignoresSchema,
+  reservations: z.array(reservationSchema),
+  providerBlockedUntil: z.record(poolSchema, z.number().finite().nonnegative()),
+});
+// State written by the former chatbot: one shared budget and no pools.
+const legacySchema = z.strictObject({
   version: z.literal(1),
-  ignores: z.record(z.string().regex(/^\d{17,20}$/), z.number().finite().nonnegative()),
-  reservations: z.array(
-    z.strictObject({
-      id: z.string().uuid().optional(),
-      at: z.number().finite().nonnegative(),
-      tokens: z.number().int().nonnegative(),
-    }),
-  ),
+  ignores: ignoresSchema,
+  reservations: z.array(reservationSchema.omit({ pool: true })),
   providerBlockedUntil: z.number().finite().nonnegative(),
 });
 type State = z.infer<typeof stateSchema>;
+type Budget = BotConfig['rateLimits'][BudgetPool];
 const day = 86_400_000;
 
+function parseState(value: unknown): State {
+  const legacy = legacySchema.safeParse(value);
+  if (!legacy.success) return stateSchema.parse(value);
+  // The chatbot used the same model the screening stage now uses by default.
+  return {
+    version: 2,
+    ignores: legacy.data.ignores,
+    reservations: legacy.data.reservations.map((entry) => ({ ...entry, pool: 'screen' })),
+    providerBlockedUntil: {
+      screen: legacy.data.providerBlockedUntil,
+      verify: legacy.data.providerBlockedUntil,
+    },
+  };
+}
+
 export class StateStore {
-  private state: State = { version: 1, ignores: {}, reservations: [], providerBlockedUntil: 0 };
+  private state: State = {
+    version: 2,
+    ignores: {},
+    reservations: [],
+    providerBlockedUntil: { screen: 0, verify: 0 },
+  };
   private readonly queue = new SerialQueue();
 
   constructor(
@@ -30,7 +61,7 @@ export class StateStore {
 
   async load(): Promise<void> {
     const value = await readJson(this.path);
-    this.state = stateSchema.parse(value ?? this.state);
+    this.state = parseState(value ?? this.state);
     this.prune(this.state);
     await writeJson(this.path, this.state);
   }
@@ -70,19 +101,17 @@ export class StateStore {
     });
   }
 
-  async reserve(tokens: number, limits: BotConfig['rateLimits']): Promise<string> {
+  async reserve(pool: BudgetPool, tokens: number, limits: Budget): Promise<string> {
     const id = randomUUID();
     await this.mutate((state) => {
       const now = this.now();
-      if (state.providerBlockedUntil > now)
-        throw new RateLimitError(
-          'provider',
-          (state.providerBlockedUntil - now) / 1_000,
-          'cooldown',
-        );
-      const minute = state.reservations.filter((entry) => entry.at > now - 60_000);
-      const total = (entries: State['reservations']) =>
-        entries.reduce((sum, entry) => sum + entry.tokens, 0);
+      const blockedUntil = state.providerBlockedUntil[pool] ?? 0;
+      if (blockedUntil > now)
+        throw new RateLimitError('provider', (blockedUntil - now) / 1_000, 'cooldown');
+      const entries = state.reservations.filter((entry) => entry.pool === pool);
+      const minute = entries.filter((entry) => entry.at > now - 60_000);
+      const total = (list: State['reservations']) =>
+        list.reduce((sum, entry) => sum + entry.tokens, 0);
       if (
         minute.length >= limits.requestsPerMinute ||
         total(minute) + tokens > limits.tokensPerMinute
@@ -94,22 +123,16 @@ export class StateStore {
         );
       }
       if (
-        state.reservations.length >= limits.requestsPerDay ||
-        total(state.reservations) + tokens > limits.tokensPerDay
+        entries.length >= limits.requestsPerDay ||
+        total(entries) + tokens > limits.tokensPerDay
       ) {
         throw new RateLimitError(
           'day',
-          this.budgetWait(
-            state.reservations,
-            tokens,
-            limits.requestsPerDay,
-            limits.tokensPerDay,
-            day,
-          ),
-          state.reservations.length >= limits.requestsPerDay ? 'requests' : 'tokens',
+          this.budgetWait(entries, tokens, limits.requestsPerDay, limits.tokensPerDay, day),
+          entries.length >= limits.requestsPerDay ? 'requests' : 'tokens',
         );
       }
-      state.reservations.push({ id, at: now, tokens });
+      state.reservations.push({ id, pool, at: now, tokens });
     });
     return id;
   }
@@ -141,18 +164,23 @@ export class StateStore {
     });
   }
 
-  blockProvider(milliseconds: number): Promise<void> {
+  blockProvider(pool: BudgetPool, milliseconds: number): Promise<void> {
     return this.mutate((state) => {
-      state.providerBlockedUntil = Math.max(state.providerBlockedUntil, this.now() + milliseconds);
+      state.providerBlockedUntil[pool] = Math.max(
+        state.providerBlockedUntil[pool] ?? 0,
+        this.now() + milliseconds,
+      );
     });
   }
 
-  usage() {
-    const requests = this.state.reservations.filter((entry) => entry.at > this.now() - day);
+  usage(pool: BudgetPool) {
+    const requests = this.state.reservations.filter(
+      (entry) => entry.pool === pool && entry.at > this.now() - day,
+    );
     return {
       requests: requests.length,
       reservedTokens: requests.reduce((sum, r) => sum + r.tokens, 0),
-      blockedUntil: this.state.providerBlockedUntil,
+      blockedUntil: this.state.providerBlockedUntil[pool] ?? 0,
     };
   }
 }

@@ -4,11 +4,9 @@ import { loadEnv } from './config/env.js';
 import { ConfigStore } from './config/store.js';
 import { StateStore } from './storage/state-store.js';
 import { GroqProvider } from './ai/groq.js';
-import { MessageService } from './discord/message-service.js';
+import { FactCheckService } from './factcheck/service.js';
 import { InteractionService } from './discord/interactions.js';
 import { errorKind, errorDetails } from './core/errors.js';
-import { DiscordClock } from './discord/clock.js';
-import { PreconfiguredResponses } from './config/preconfigured-responses.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -21,12 +19,6 @@ async function main(): Promise<void> {
   // Fail closed on invalid state/config instead of silently discarding ignores or budgets.
   await config.load();
   await state.load();
-  const messageClock = new DiscordClock();
-  await messageClock.synchronize(env.DISCORD_TOKEN);
-  logger.info(
-    { offsetSeconds: Math.round((messageClock.now() - Date.now()) / 1_000) },
-    'Discord message clock synchronized',
-  );
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -37,50 +29,31 @@ async function main(): Promise<void> {
     makeCache: Options.cacheWithLimits({ ...Options.DefaultMakeCacheSettings, MessageManager: 50 }),
     sweepers: { messages: { interval: 300, lifetime: 3_600 } },
   });
-  const messages = new MessageService(
-    client,
+  const factCheck = new FactCheckService(
     env.DISCORD_GUILD_ID,
     config,
     state,
     new GroqProvider(env.GROQ_API_KEY, state),
     logger,
-    new PreconfiguredResponses(),
-    () => messageClock.now(),
   );
-  const clockRefresh = setInterval(() => {
-    void messageClock
-      .synchronize(env.DISCORD_TOKEN)
-      .catch((error: unknown) =>
-        logger.warn(
-          errorDetails(error),
-          'Discord clock refresh failed; keeping the previous time anchor',
-        ),
-      );
-  }, 5 * 60_000);
-  clockRefresh.unref();
   let stopping = false;
   const stop = () => {
     if (stopping) return;
     stopping = true;
     logger.info('Shutting down');
-    messages.stop();
-    clearInterval(clockRefresh);
-    client.destroy();
+    factCheck.stop();
+    void client.destroy();
   };
   const interactions = new InteractionService(
     client,
     env.DISCORD_GUILD_ID,
     config,
     state,
-    messages,
+    factCheck,
     logger,
     stop,
   );
-  client.on(Events.MessageCreate, (message) => {
-    void messages
-      .handle(message)
-      .catch((error: unknown) => logger.warn({ kind: errorKind(error) }, 'Message event failed'));
-  });
+  client.on(Events.MessageCreate, (message) => factCheck.handle(message));
   client.on(Events.InteractionCreate, (interaction) => {
     void interactions.handle(interaction);
   });
@@ -93,21 +66,19 @@ async function main(): Promise<void> {
       logger.fatal(
         'Bot application ID mismatch or configured guild is unavailable. Check environment and invite.',
       );
-      messages.stop();
-      clearInterval(clockRefresh);
-      client.destroy();
+      stop();
       process.exitCode = 1;
       return;
     }
-    logger.info({ bot: ready.user.tag, model: config.current.ai.model }, 'Bot ready');
+    // Deployment waits for this exact log message.
+    logger.info({ bot: ready.user.tag, screenModel: config.current.ai.screenModel }, 'Bot ready');
   });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
     await client.login(env.DISCORD_TOKEN);
   } catch (error) {
-    messages.stop();
-    clearInterval(clockRefresh);
+    factCheck.stop();
     await client.destroy();
     throw error;
   }

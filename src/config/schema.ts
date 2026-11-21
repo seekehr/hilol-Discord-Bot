@@ -1,121 +1,107 @@
 import { z } from 'zod';
-import { MAX_AUTO_MESSAGE_AGE_SECONDS } from '../core/auto-reply.js';
-import { defaultRateLimitMessages } from '../core/rate-limit-error.js';
 
 const id = z.string().regex(/^\d{17,20}$/, 'Expected a Discord snowflake ID');
 const integer = (min: number, max: number) => z.number().int().min(min).max(max);
-const rateLimitMessagesSchema = z.strictObject({
-  user: z.string().max(1_800).default(defaultRateLimitMessages.user),
-  minute: z.string().max(1_800).default(defaultRateLimitMessages.minute),
-  day: z.string().max(1_800).default(defaultRateLimitMessages.day),
-  provider: z.string().max(1_800).default(defaultRateLimitMessages.provider),
+const budgetSchema = z.strictObject({
+  requestsPerMinute: integer(1, 10_000),
+  requestsPerDay: integer(1, 1_000_000),
+  tokensPerMinute: integer(1_000, 10_000_000),
+  tokensPerDay: integer(1_000, 1_000_000_000),
 });
 
 export const configSchema = z
   .strictObject({
     ownerIds: z.array(id).max(100).default([]),
     enabled: z.boolean(),
+    // Fact-checking guidelines (scope, sources, perspective, tone) live in this file.
     promptFile: z
       .string()
       .trim()
       .max(260)
       .regex(/^[\w.-]+\.txt$/i, 'Use a .txt filename inside the config directory'),
-    triggers: z.strictObject({
-      mentions: z.boolean(),
-      replies: z.boolean(),
-      // Empty means any accessible channel in the configured guild, including threads.
-      directChannelIds: z.array(id).max(100),
-      excludedChannelIds: z.array(id).max(100),
+    channels: z.strictObject({
+      // Empty means every channel in the server the bot can read, including threads.
+      include: z.array(id).max(100),
+      exclude: z.array(id).max(100),
     }),
-    autoReply: z.strictObject({
-      enabled: z.boolean(),
-      channelId: id.nullable(),
-      minIntervalSeconds: integer(10, 86_400),
-      maxIntervalSeconds: integer(10, 86_400),
-      maxMessageAgeSeconds: integer(1, MAX_AUTO_MESSAGE_AGE_SECONDS),
+    screening: z.strictObject({
+      // Messages are screened in batches to stay within the provider's request budget.
+      batchSize: integer(1, 25),
+      maxWaitSeconds: integer(1, 300),
+      minMessageChars: integer(1, 500),
+      maxMessageChars: integer(100, 4_000),
+      maxQueuedMessages: integer(1, 500),
+      maxMessageAgeSeconds: integer(30, 3_600),
+      userChecksPerMinute: integer(1, 60),
+    }),
+    corrections: z.strictObject({
+      minConfidence: z.number().min(0).max(1),
+      channelCooldownSeconds: integer(0, 86_400),
+      maxPerBatch: integer(1, 10),
+      contextMessages: integer(0, 20),
     }),
     ai: z.strictObject({
-      model: z.string().trim().min(1).max(150),
-      temperature: z.number().min(0).max(2),
-      maxOutputTokens: integer(64, 4_096),
-      timeoutMs: integer(1_000, 120_000),
+      screenModel: z.string().trim().min(1).max(150),
+      verifyModel: z.string().trim().min(1).max(150),
+      // Groq's built-in browser_search tool; only some models support it.
+      webSearch: z.boolean(),
+      screenMaxOutputTokens: integer(64, 4_096),
+      verifyMaxOutputTokens: integer(256, 8_192),
+      searchTokenAllowance: integer(0, 100_000),
+      timeoutMs: integer(1_000, 180_000),
       maxRetries: integer(0, 3),
-      maxConcurrentRequests: integer(1, 5),
     }),
-    context: z.strictObject({
-      maxMessages: integer(0, 50),
-      maxInputChars: integer(100, 8_000),
-      maxHistoryChars: integer(0, 16_000),
-      ttlSeconds: integer(60, 86_400),
-      maxChannels: integer(1, 500),
-    }),
-    rateLimits: z.strictObject({
-      userRequests: integer(1, 100),
-      userWindowSeconds: integer(5, 86_400),
-      userCooldownSeconds: integer(0, 3_600),
-      requestsPerMinute: integer(1, 10_000),
-      requestsPerDay: integer(1, 1_000_000),
-      tokensPerMinute: integer(1_000, 10_000_000),
-      tokensPerDay: integer(1_000, 1_000_000_000),
-      errorNoticeCooldownSeconds: integer(5, 3_600),
-      messages: rateLimitMessagesSchema.default(defaultRateLimitMessages),
-    }),
+    // Groq limits are per model, so each stage has its own local budget.
+    rateLimits: z.strictObject({ screen: budgetSchema, verify: budgetSchema }),
   })
   .superRefine((config, ctx) => {
-    if (config.autoReply.minIntervalSeconds > config.autoReply.maxIntervalSeconds) {
+    if (config.screening.minMessageChars > config.screening.maxMessageChars)
       ctx.addIssue({
         code: 'custom',
-        path: ['autoReply'],
-        message: 'Minimum interval must not exceed maximum interval',
+        path: ['screening'],
+        message: 'minMessageChars must not exceed maxMessageChars',
       });
-    }
-    if (config.autoReply.enabled && !config.autoReply.channelId) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['autoReply', 'channelId'],
-        message: 'Select a channel before enabling automatic replies',
-      });
-    }
   });
 
 export type BotConfig = z.infer<typeof configSchema>;
+export type BudgetPool = keyof BotConfig['rateLimits'];
+
+const freeTierBudget = {
+  requestsPerMinute: 30,
+  requestsPerDay: 1_000,
+  tokensPerMinute: 8_000,
+  tokensPerDay: 200_000,
+};
 
 export const defaultConfig: BotConfig = {
   ownerIds: [],
   enabled: true,
-  promptFile: 'prompt.txt',
-  triggers: { mentions: true, replies: true, directChannelIds: [], excludedChannelIds: [] },
-  autoReply: {
-    enabled: false,
-    channelId: null,
-    minIntervalSeconds: 600,
-    maxIntervalSeconds: 900,
-    maxMessageAgeSeconds: 120,
+  promptFile: 'factcheck.txt',
+  channels: { include: [], exclude: [] },
+  screening: {
+    batchSize: 10,
+    maxWaitSeconds: 30,
+    minMessageChars: 20,
+    maxMessageChars: 1_500,
+    maxQueuedMessages: 100,
+    maxMessageAgeSeconds: 600,
+    userChecksPerMinute: 6,
+  },
+  corrections: {
+    minConfidence: 0.85,
+    channelCooldownSeconds: 60,
+    maxPerBatch: 2,
+    contextMessages: 4,
   },
   ai: {
-    model: 'openai/gpt-oss-20b',
-    temperature: 0.7,
-    maxOutputTokens: 512,
-    timeoutMs: 30_000,
+    screenModel: 'openai/gpt-oss-20b',
+    verifyModel: 'openai/gpt-oss-120b',
+    webSearch: true,
+    screenMaxOutputTokens: 400,
+    verifyMaxOutputTokens: 1_500,
+    searchTokenAllowance: 3_000,
+    timeoutMs: 60_000,
     maxRetries: 1,
-    maxConcurrentRequests: 2,
   },
-  context: {
-    maxMessages: 12,
-    maxInputChars: 1_200,
-    maxHistoryChars: 2_000,
-    ttlSeconds: 3_600,
-    maxChannels: 100,
-  },
-  rateLimits: {
-    userRequests: 30,
-    userWindowSeconds: 60,
-    userCooldownSeconds: 0,
-    requestsPerMinute: 30,
-    requestsPerDay: 1_000,
-    tokensPerMinute: 8_000,
-    tokensPerDay: 200_000,
-    errorNoticeCooldownSeconds: 30,
-    messages: { ...defaultRateLimitMessages },
-  },
+  rateLimits: { screen: { ...freeTierBudget }, verify: { ...freeTierBudget } },
 };

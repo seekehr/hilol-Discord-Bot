@@ -1,5 +1,5 @@
 import { countTokens } from 'gpt-tokenizer/model/gpt-oss-20b';
-import type { ChatMessage } from '../core/conversation.js';
+import type { ChatMessage } from './types.js';
 
 export function estimateRequestTokens(
   messages: ChatMessage[],

@@ -72,15 +72,14 @@ printf '%s  %s\n' "$checksum" "$stage/release.tgz" | sha256sum -c -
 mkdir "$stage/incoming"
 tar -xzf "$stage/release.tgz" --no-same-owner -C "$stage/incoming"
 for path in dist/index.js dist/register-commands.js node_modules package.json \
-  package-lock.json config/preconfigured_message_responses.json; do
+  package-lock.json; do
   test -e "$stage/incoming/$path"
 done
 
-# Back up only release files. Never copy or overwrite .env, bot.json, prompt.txt,
-# or data/. Config/state migrations performed by application code are not undone.
+# Back up only release files. Never copy or overwrite .env, bot.json, the guidelines
+# file, or data/. Config/state migrations performed by application code are not undone.
 sudo -n tar -czf "$stage/previous.tgz" \
-  dist node_modules package.json package-lock.json \
-  config/preconfigured_message_responses.json
+  dist node_modules package.json package-lock.json
 
 # The exit trap restores the backup if any subsequent command fails.
 replacing=1
@@ -88,13 +87,11 @@ sudo -n systemctl stop hilol
 sudo -n rm -rf -- /opt/hilol/dist /opt/hilol/node_modules
 sudo -n cp -a "$stage/incoming/dist" "$stage/incoming/node_modules" /opt/hilol/
 sudo -n cp "$stage/incoming/package.json" "$stage/incoming/package-lock.json" /opt/hilol/
-sudo -n cp "$stage/incoming/config/preconfigured_message_responses.json" config/
 sudo -n chown -R hilol:hilol dist node_modules
-sudo -n chown hilol:hilol package.json package-lock.json \
-  config/preconfigured_message_responses.json
+sudo -n chown hilol:hilol package.json package-lock.json
 # Files extracted under umask 077 must still be readable by the service user.
 sudo -n chmod -R u+rX dist node_modules
-sudo -n chmod u+r package.json package-lock.json config/preconfigured_message_responses.json
+sudo -n chmod u+r package.json package-lock.json
 
 commands_touched=1
 # Avoid dumping REST errors that might include credentials into Actions logs.

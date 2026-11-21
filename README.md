@@ -1,11 +1,18 @@
-# Hilol Discord Bot - Made wit <3 by Seekehr
+# FactCheckerBot - Made wit <3 by Seekehr
+
 [![Discord members](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FCWCPwmPyJb%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=discord&suffix=%20members&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/CWCPwmPyJb)
 
-A TypeScript chatbot for your Discord server, powered by Groq. It answers mentions and replies, and responds immediately to new messages in a chosen channel when ready, with a random 10–15 minute cooldown between automatic replies. It won't ping anyone.
+An AI-powered fact-checker for your Discord server, powered by Groq. It reads every message in the server and replies **only** when someone makes an objectively incorrect statement: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs, jokes and questions are left alone, and it never pings anyone.
 
-Includes editable personality, per-user rate limits, timed ignores, and interactive setup. Built for one server per bot instance.
+It checks claims with web search. For Islamic topics it draws especially on the Qur'an, hadith collections, and the works of Shi'a scholars. It presents the Shi'a scholarly position where relevant, but it never misstates a source and never posts a correction it could not verify.
 
-<img src="preview.png" width="700">
+Built for one server per bot instance.
+
+## How it works
+
+1. **Screening.** Messages of at least 20 characters are queued and screened in batches of up to 10 (or every 30 seconds) by a fast model (`openai/gpt-oss-20b`). The model flags messages that contain a checkable factual claim that may be wrong.
+2. **Verification.** Each flagged message is checked by a larger model (`openai/gpt-oss-120b`) using Groq's built-in browser search. It gets the few preceding messages as context.
+3. **Correction.** The bot replies only if the verifier says the statement is incorrect with confidence of at least 0.85. After a correction, that channel has a 60-second cooldown. Errors are logged, never posted in chat.
 
 ## Setup
 
@@ -13,7 +20,7 @@ You'll need Node.js 24, a Discord bot token, and a [Groq API key](https://consol
 
 1. Copy `.env.example` to `.env` and fill in your tokens, application ID, and server ID.
 2. In the [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent**. Invite the bot with the `bot` and `applications.commands` scopes.
-3. Give it **View Channels**, **Send Messages**, and **Read Message History**. Add **Send Messages in Threads** if needed.
+3. Give it **View Channels**, **Send Messages**, and **Read Message History** in the channels it should watch. Add **Send Messages in Threads** if needed.
 
 ```sh
 npm ci
@@ -34,41 +41,53 @@ npm run build
 npm start
 ```
 
-Run `/setup` in Discord to choose a channel, personality, and timing. Automatic replies stay off until you select a channel.
+## Guidelines: scope, sources and perspective
 
-Automatic replies only target messages at most two minutes old. Messages during cooldown are skipped, not queued; once it's over, the next fresh message gets a reply. Mentions and replies to the bot bypass this cooldown.
+The bot's fact-checking guidelines are in `config/factcheck.txt`, selected by `"promptFile"` in the JSON. The file is gitignored and created automatically with the defaults from [prompt-file.ts](src/config/prompt-file.ts). It covers:
+
+- **Scope:** what counts as objectively false, and what to leave alone.
+- **Sources:** official statistics (UN, World Bank, WHO, Pew, Our World in Data), and Qur'an and hadith references. These include Shi'a works (al-Kafi, Nahj al-Balagha, Bihar al-Anwar, …) and scholars (al-Mufid, al-Tusi, al-Majlisi, Tabataba'i, al-Khoei, Sistani, Mutahhari, …).
+- **Perspective:** a Twelver Shi'a scholarly perspective, with objectivity first.
+- **Tone:** brief and respectful.
+
+Edit the file to tune the bot. Changes apply to the next check. The reply format is fixed in code, so edits cannot break parsing.
 
 ## Commands
 
 | Command                                         | What it does                                                |
 | ----------------------------------------------- | ----------------------------------------------------------- |
-| `/setup`                                        | Open the setup panel                                        |
-| `/personality`                                  | Edit the bot's personality                                  |
 | `/config show`, `/config set`, `/config reload` | View, change, or reload settings                            |
-| `/ignore user:@someone time:2h`                 | Ignore someone's messages and pings temporarily             |
+| `/ignore user:@someone time:2h`                 | Stop fact-checking someone temporarily                      |
 | `/unignore user:@someone`                       | Remove an ignore                                            |
-| `/forget`                                       | Clear this channel's bot context                            |
-| `/status`, `/help`                              | Check usage or get help                                     |
-| `/about`                                        | Show package version, Git commit, and runtime               |
+| `/status`                                       | Show activity since start and API budget usage              |
+| `/about`, `/help`                               | Show version and author, or how the bot works               |
 | `/stop`                                         | Shut down this instance; start again through GitHub Actions |
 
-Every command and setup control is restricted to `ownerIds`, including `/help` and `/status`. An empty list disables command access; server admins get no bypass. Owners don't need Manage Server. Discord may still show commands to others; use Server Settings → Integrations to hide them if desired. Ignore durations accept `s`, `m`, `h`, or `d`, up to `365d`.
+Only users in `ownerIds` can use commands; server admins get no bypass. Ignore durations accept `s`, `m`, `h`, or `d`, up to `365d`.
 
-Settings live in `config/bot.json`; see the [example](config/bot.example.json). Commands save to that same file. After manual edits, use `/config reload`. Secrets, local settings, and runtime data are gitignored.
+Settings live in `config/bot.json`; see the [example](config/bot.example.json). The main settings are:
 
-Personality lives in `config/prompt.txt`, selected by `"promptFile": "prompt.txt"` in the JSON. It is gitignored and created automatically; [prompt.example.txt](config/prompt.example.txt) shows the default. Edit the file or use `/personality`—changes apply to the next AI reply. Existing inline personality text is migrated automatically.
+| Setting                                           | Default            | Meaning                                                    |
+| ------------------------------------------------- | ------------------ | ---------------------------------------------------------- |
+| `enabled`                                         | `true`             | Pause or resume fact-checking                              |
+| `channels.include` / `channels.exclude`           | `[]`               | Channel or category allow/deny lists (empty include = all) |
+| `screening.batchSize`, `screening.maxWaitSeconds` | `10`, `30`         | Batch size and maximum wait before screening               |
+| `screening.minMessageChars`                       | `20`               | Shorter messages are never checked                         |
+| `screening.userChecksPerMinute`                   | `6`                | Per-user cap so one person can't drain the budget          |
+| `corrections.minConfidence`                       | `0.85`             | Minimum verifier confidence to post                        |
+| `corrections.channelCooldownSeconds`              | `60`               | Quiet time per channel after a correction                  |
+| `ai.screenModel`, `ai.verifyModel`                | gpt-oss-20b / 120b | Groq models for each stage                                 |
+| `ai.webSearch`                                    | `true`             | Use Groq browser search during verification                |
 
-Customize rate-limit replies in `rateLimits.messages`: `user`, `minute`, `day`, and `provider`. Text supports `{retryAfterSeconds}` and `{resource}`; an empty string silences that notice.
+After manual edits, use `/config reload`. Secrets, local settings, and runtime data are gitignored.
 
-Edit [config/preconfigured_message_responses.json](config/preconfigured_message_responses.json) for quick replies like `"hi": "hi love"`. Matching ignores the bot mention, case, whitespace, and trailing punctuation. Whole-phrase matches skip Groq; other messages use AI. Changes take effect on the next message. Normal channel rules, ignores, user limits, and auto cooldowns still apply. This file is tracked in Git.
-
-If no owners are configured, edit the file and restart. To copy a user ID, enable Discord Developer Mode, then right-click the user → Copy User ID.
+Upgrading from the old chatbot: on first start the old `config/bot.json` is migrated automatically. Owners, the enabled flag, and excluded channels are kept. The old personality prompt is not reused.
 
 ## Groq limits
 
-The default model is `openai/gpt-oss-20b`. As of October 21, 2026, its published free limits are **30 requests/minute, 1,000/day, 8,000 tokens/minute, and 200,000/day**. Defaults use those full limits, with 30 messages/minute per user and no extra user cooldown. [Check Groq's current limits](https://console.groq.com/docs/rate-limits).
+Groq limits each model separately. On the free plan, `openai/gpt-oss-20b` and `openai/gpt-oss-120b` each allow **30 requests/minute, 1,000/day, 8,000 tokens/minute, and 200,000/day** ([check current limits](https://console.groq.com/docs/rate-limits)). The bot keeps a separate local budget per stage in `rateLimits.screen` and `rateLimits.verify`, and respects provider cooldowns.
 
-The bot reserves tokenizer-estimated input plus the output budget while requests run, then uses Groq's reported usage when available. Unknown/failed usage keeps its estimate. Long prompts and conversation history still consume tokens, so 30 requests/minute isn't a guarantee of 30 full conversations. Limits are shared across your Groq organization, and provider cooldowns are respected.
+Batching means one screening request covers up to 10 messages. Verification is the expensive step: web search results add input tokens, so `ai.searchTokenAllowance` (3,000) is reserved up front and then settled with Groq's reported usage. Expect roughly one verification per minute on the free plan. When a budget runs out, messages are skipped, not queued.
 
 ## Hosting
 
@@ -81,8 +100,8 @@ docker compose run --rm bot node dist/register-commands.js
 docker compose up -d
 ```
 
-No inbound ports are needed. Settings stay in `config/`; ignore timers and API budgets persist in a Docker volume. Run one instance at a time. A [systemd service](deploy/hilol.service) is also included; it expects `/opt/hilol`, a `hilol` user, and writable `config/` and `data/` directories.
+No inbound ports are needed. Settings stay in `config/`; ignore timers and API budgets persist in a Docker volume. Run one instance at a time. A [systemd service](deploy/hilol.service) is also included; see [deploy/README.md](deploy/README.md) for automatic deployment.
 
-Conversation context stays in memory per channel and is sent to Groq when generating replies. Restarts clear context and auto-reply cooldowns; ignores and API budgets survive.
+Message text and a few preceding messages are sent to Groq for checking. Nothing is stored except ignores and API budget counters.
 
 For development, use `npm run dev`. Run `npm run check` to check types, tests, formatting, and the build.

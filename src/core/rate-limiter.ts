@@ -1,36 +1,19 @@
-import type { BotConfig } from '../config/schema.js';
-import { RateLimitError } from './rate-limit-error.js';
-
+// Stops one user from consuming the shared screening budget by flooding a channel.
 export class UserRateLimiter {
   private readonly users = new Map<string, number[]>();
   constructor(private readonly now = Date.now) {}
 
-  consume(userId: string, limits: BotConfig['rateLimits']): void {
+  allow(userId: string, perMinute: number): boolean {
     const now = this.now();
-    // Retain enough history for settings changed at runtime; memory stays bounded by one day.
     for (const [id, times] of this.users) {
-      const recent = times.filter((at) => at > now - 86_400_000);
-      if (!recent.length) this.users.delete(id);
-      else this.users.set(id, recent);
+      const recent = times.filter((at) => at > now - 60_000);
+      if (recent.length) this.users.set(id, recent);
+      else this.users.delete(id);
     }
     const times = this.users.get(userId) ?? [];
-    const window = times.filter((at) => at > now - limits.userWindowSeconds * 1_000);
-    if (
-      window.length >= limits.userRequests ||
-      (times.length && now - times.at(-1)! < limits.userCooldownSeconds * 1_000)
-    ) {
-      const windowWait =
-        window.length >= limits.userRequests
-          ? window[window.length - limits.userRequests]! + limits.userWindowSeconds * 1_000 - now
-          : 0;
-      const cooldownWait = times.length
-        ? times.at(-1)! + limits.userCooldownSeconds * 1_000 - now
-        : 0;
-      throw new RateLimitError('user', Math.max(windowWait, cooldownWait) / 1_000);
-    }
+    if (times.length >= perMinute) return false;
     times.push(now);
-    // The schema permits at most 100 requests in any user window. Keeping the latest
-    // 100 timestamps is sufficient for every supported setting, even after a change.
-    this.users.set(userId, times.slice(-100));
+    this.users.set(userId, times);
+    return true;
   }
 }

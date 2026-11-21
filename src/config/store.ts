@@ -2,30 +2,26 @@ import { configSchema, defaultConfig, type BotConfig } from './schema.js';
 import { readJson, writeJson, SerialQueue } from '../storage/json-file.js';
 import { UserError } from '../core/errors.js';
 import { dirname, resolve } from 'node:path';
-import { ensurePrompt, readPrompt, savePrompt, validatePrompt } from './prompt-file.js';
+import { ensurePrompt, readPrompt } from './prompt-file.js';
 
-// Upgrade the former delayed-reply settings without touching unrelated settings.
-function migrateLegacyConfig(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || !('autoReply' in value)) return value;
-  const auto = value.autoReply;
-  if (
-    !auto ||
-    typeof auto !== 'object' ||
-    !('minDelaySeconds' in auto) ||
-    !('maxDelaySeconds' in auto)
-  )
+// Configs from the former chatbot keep only owners, the on/off switch and excluded
+// channels. Its personality prompt is deliberately not reused as fact-check guidelines.
+function migrateChatbotConfig(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || !('autoReply' in value || 'triggers' in value))
     return value;
-  const { minDelaySeconds: _min, maxDelaySeconds: _max, ...rest } = auto;
+  const legacy = value as {
+    ownerIds?: unknown;
+    enabled?: unknown;
+    triggers?: { excludedChannelIds?: unknown };
+  };
+  const defaults = structuredClone(defaultConfig);
   return {
-    ...value,
-    autoReply: {
-      ...rest,
-      minIntervalSeconds: defaultConfig.autoReply.minIntervalSeconds,
-      maxIntervalSeconds: defaultConfig.autoReply.maxIntervalSeconds,
-      maxMessageAgeSeconds:
-        'maxMessageAgeSeconds' in auto && typeof auto.maxMessageAgeSeconds === 'number'
-          ? Math.min(auto.maxMessageAgeSeconds, 120)
-          : 120,
+    ...defaults,
+    ownerIds: legacy.ownerIds ?? defaults.ownerIds,
+    enabled: legacy.enabled ?? defaults.enabled,
+    channels: {
+      ...defaults.channels,
+      exclude: legacy.triggers?.excludedChannelIds ?? defaults.channels.exclude,
     },
   };
 }
@@ -62,39 +58,22 @@ export class ConfigStore {
   async load(): Promise<void> {
     await this.queue.run(async () => {
       const disk = await readJson(this.path);
-      let migrated = migrateLegacyConfig(disk ?? defaultConfig);
-      let legacyPrompt: string | undefined;
-      if (migrated && typeof migrated === 'object' && 'personality' in migrated) {
-        if (typeof migrated.personality !== 'string')
-          throw new UserError('Invalid legacy personality prompt.');
-        legacyPrompt = validatePrompt(migrated.personality);
-        const { personality: _personality, ...rest } = migrated;
-        migrated = {
-          ...rest,
-          promptFile: 'promptFile' in rest ? rest.promptFile : defaultConfig.promptFile,
-        };
-      }
+      const migrated = migrateChatbotConfig(disk ?? defaultConfig);
       const next = this.validate(migrated);
-      await ensurePrompt(this.promptPath(next), legacyPrompt);
-      if (
-        disk === undefined ||
-        migrated !== disk ||
-        JSON.stringify(next) !== JSON.stringify(migrated)
-      )
+      await ensurePrompt(this.promptPath(next));
+      if (disk === undefined || JSON.stringify(next) !== JSON.stringify(disk))
         await writeJson(this.path, next);
       this.value = next;
       this.revision++;
     });
   }
 
-  update(change: (draft: BotConfig) => void, promptText?: string): Promise<void> {
+  update(change: (draft: BotConfig) => void): Promise<void> {
     return this.queue.run(async () => {
       const draft = this.current;
       change(draft);
       const next = this.validate(draft);
-      // Validate both inputs before touching either file. Each file is saved atomically.
-      if (promptText === undefined) await ensurePrompt(this.promptPath(next));
-      else await savePrompt(this.promptPath(next), promptText);
+      await ensurePrompt(this.promptPath(next));
       await writeJson(this.path, next);
       this.value = next;
       this.revision++;
@@ -110,7 +89,7 @@ export class ConfigStore {
           ['constructor', 'prototype', '__proto__'].includes(key),
       )
     ) {
-      throw new UserError('Invalid setting path. Use a known path such as ai.model.');
+      throw new UserError('Invalid setting path. Use a known path such as ai.verifyModel.');
     }
     await this.update((draft) => {
       let target = draft as unknown as Record<string, unknown>;

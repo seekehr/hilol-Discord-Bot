@@ -45,9 +45,15 @@ stops the service, replaces release files, registers slash commands, and starts 
 service. It waits up to 60 seconds for Discord readiness and checks the same process
 remains running five seconds later. Deployments are serialized on GitHub and the VM.
 
-Only `dist/`, `node_modules/`, `package.json`, `package-lock.json`, and
-`config/preconfigured_message_responses.json` are replaced. The service definition,
-`.env`, `config/bot.json`, `config/prompt.txt`, and `data/` are not deployed.
+Only `dist/`, `node_modules/`, `package.json`, and `package-lock.json` are replaced.
+The service definition, `.env`, `config/bot.json`, the fact-checking guidelines file
+(`config/factcheck.txt`), and `data/` are not deployed. On first start after the
+FactCheckerBot upgrade, the bot migrates `config/bot.json` (keeping `ownerIds`,
+`enabled`, and excluded channels) and creates `config/factcheck.txt`. The old
+`prompt.txt` and `preconfigured_message_responses.json` are left in place but unused.
+
+The service, user, and directory keep the original `hilol` names so existing servers
+and the GitHub workflows keep working without changes on the VM.
 
 On an ordinary deployment failure, the script restores the previous release and
 requests a service restart. If command registration was attempted, it also tries

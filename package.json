@@ -1,8 +1,9 @@
 {
-  "name": "hilol-discord-bot",
-  "version": "1.0.1",
+  "name": "factcheckerbot",
+  "version": "2.0.0",
   "private": true,
-  "description": "A configurable, single-server Discord chatbot powered by Groq",
+  "description": "An AI-powered Discord bot that corrects objectively incorrect statements, drawing on statistics and Islamic sources with a Shi'a scholarly perspective",
+  "author": "Seekehr",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
