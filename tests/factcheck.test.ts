@@ -4,10 +4,14 @@ import type { Message } from 'discord.js';
 import { FactCheckService } from '../src/factcheck/service.js';
 import {
   formatCorrection,
+  hasEvidence,
+  hasLink,
   parseScreening,
+  safeReply,
   parseVerdict,
   screeningPrompt,
   verificationPrompt,
+  withCitations,
 } from '../src/factcheck/prompts.js';
 import type { Completer, CompletionRequest } from '../src/ai/groq.js';
 import { ConfigStore } from '../src/config/store.js';
@@ -32,7 +36,13 @@ describe('prompts and parsing', () => {
       parseVerdict(
         'Result: {"incorrect":true,"confidence":0.9,"claim":"x","correction":"Actually y."}',
       ),
-    ).toEqual({ incorrect: true, confidence: 0.9, claim: 'x', correction: 'Actually y.' });
+    ).toEqual({
+      incorrect: true,
+      confidence: 0.9,
+      claim: 'x',
+      correction: 'Actually y.',
+      evidence: [],
+    });
     expect(parseVerdict('{"incorrect":"yes","confidence":2}')).toBeUndefined();
     expect(parseVerdict('')).toBeUndefined();
   });
@@ -43,6 +53,7 @@ describe('prompts and parsing', () => {
       confidence: 1,
       claim: '',
       correction: '@everyone ' + '😀'.repeat(2_000),
+      evidence: [],
     });
     expect(text.startsWith('**Fact check:** @​everyone')).toBe(true);
     expect(text.length).toBeLessThanOrEqual(1_900);
@@ -61,6 +72,86 @@ describe('prompts and parsing', () => {
     );
     expect(system!.content).toContain('Use Shi’a sources.');
     expect(system!.content).toContain('Search the web');
+  });
+
+  it('tells the verifier which channel the message is in', () => {
+    const prompt = (channel?: { name: string; parent?: string }) =>
+      verificationPrompt('', { author: 'A', text: 'B' }, [], 100, true, channel)[0]!.content;
+    expect(prompt({ name: 'tts' })).toContain('posted in #tts.');
+    expect(prompt({ name: 'idea', parent: 'tts' })).toContain('posted in #idea (a thread in #tts)');
+    expect(prompt()).not.toContain('posted in');
+  });
+
+  it('rejects corrections without quoted evidence or with numbers the evidence lacks', () => {
+    // Regression: a confident correction invented "Australia is around 0.2 per 100,000".
+    const original = 'Australia has a higher recorded rape rate per capita than Pakistan';
+    const verdict = (correction: string, evidence: { source: string; quote: string }[]) => ({
+      incorrect: true,
+      confidence: 0.95,
+      claim: original,
+      correction,
+      evidence,
+    });
+    const invented =
+      'Pakistan has a higher rate. Australia is around 0.2 per 100,000 【5†L14-L22】.';
+    expect(hasEvidence(verdict(invented, []), original)).toBe(false);
+    expect(
+      hasEvidence(
+        verdict(invented, [
+          {
+            source:
+              '<https://www.abs.gov.au/statistics/people/crime-and-justice/recorded-crime-victims>',
+            quote: 'Sexual assault victims: 147 per 100,000 persons',
+          },
+        ]),
+        original,
+      ),
+    ).toBe(false);
+    expect(
+      hasEvidence(
+        verdict('Australia recorded 147 sexual assault victims per 100,000 people in 2024.', [
+          {
+            source: 'ABS Recorded Crime – Victims, 2024',
+            quote: 'Sexual assault victims: 147 per 100,000 persons',
+          },
+        ]),
+        original,
+      ),
+    ).toBe(true);
+  });
+
+  it('lists links under a Citation heading, or drops them where links are off', () => {
+    const text =
+      'The ABS recorded 147 victims per 100,000 (<https://www.abs.gov.au/a>). See [WHO](https://www.who.int/b).\n\nSources:\n- https://www.abs.gov.au/a';
+    expect(withCitations(text, [], true)).toBe(
+      'The ABS recorded 147 victims per 100,000. See WHO.\n\n**Citation**\n<https://www.abs.gov.au/a>\n<https://www.who.int/b>',
+    );
+    expect(withCitations(text, [], false)).toBe(
+      'The ABS recorded 147 victims per 100,000. See WHO.',
+    );
+    const verdict = {
+      incorrect: true,
+      confidence: 0.9,
+      claim: 'c',
+      correction: 'Al-Kafi says otherwise.',
+      evidence: [{ source: 'al-Kafi, vol. 1, p. 10', quote: 'A word-for-word passage.' }],
+    };
+    expect(hasLink(verdict)).toBe(false);
+    verdict.evidence.push({
+      source: 'https://thaqalayn.net/hadith/1/1/1/1',
+      quote: 'Same passage here.',
+    });
+    expect(hasLink(verdict)).toBe(true);
+    expect(formatCorrection(verdict)).toBe(
+      '**Fact check:** Al-Kafi says otherwise.\n\n**Citation**\n<https://thaqalayn.net/hadith/1/1/1/1>',
+    );
+    expect(formatCorrection(verdict, false)).toBe('**Fact check:** Al-Kafi says otherwise.');
+  });
+
+  it('strips search citation markers from replies', () => {
+    expect(safeReply('Australia records 147 per 100,000 【5†L14-L22】.')).toBe(
+      'Australia records 147 per 100,000.',
+    );
   });
 
   it('limits each user to a number of checks per minute', () => {
@@ -99,6 +190,16 @@ function fakeMessage(content: string, overrides: Partial<Record<string, unknown>
   return { message: message as unknown as Message, reply };
 }
 
+const botId = '999999999999999999';
+function mentionMessage(content: string, overrides: Partial<Record<string, unknown>> = {}) {
+  return fakeMessage(content, {
+    client: { user: { id: botId, displayName: 'hilol' } },
+    mentions: { has: (id: string) => id === botId },
+    reference: null,
+    ...overrides,
+  });
+}
+
 async function setup(responses: (request: CompletionRequest) => string) {
   const configPath = await temporaryPath('bot.json');
   const config = new ConfigStore(configPath);
@@ -124,7 +225,7 @@ describe('fact-check service', () => {
     const { service, complete } = await setup((request) =>
       request.pool === 'screen'
         ? '{"check":[2]}'
-        : '{"incorrect":true,"confidence":0.95,"claim":"c","correction":"The Battle of Karbala was in 680 CE (61 AH)."}',
+        : '{"incorrect":true,"confidence":0.95,"claim":"c","correction":"The Battle of Karbala was in 680 CE (61 AH).","evidence":[{"source":"<https://www.britannica.com/event/Battle-of-Karbala>","quote":"Battle of Karbala, (October 10, 680 [Muharram 10, AH 61])"}]}',
     );
     const first = fakeMessage('I think pizza is the best food ever');
     const second = fakeMessage('The Battle of Karbala happened in 700 CE');
@@ -140,7 +241,8 @@ describe('fact-check service', () => {
       webSearch: { extraTokens: 3_000 },
     });
     expect(second.reply.mock.calls[0]![0]).toMatchObject({
-      content: '**Fact check:** The Battle of Karbala was in 680 CE (61 AH).',
+      content:
+        '**Fact check:** The Battle of Karbala was in 680 CE (61 AH).\n\n**Citation**\n<https://www.britannica.com/event/Battle-of-Karbala>',
       allowedMentions: { parse: [], repliedUser: false },
     });
     expect(service.stats).toMatchObject({ screened: 2, flagged: 1, corrections: 1 });
@@ -191,11 +293,87 @@ describe('fact-check service', () => {
     service.stop();
   });
 
+  it('always answers a direct mention, even a short one, using the replied-to message', async () => {
+    const { service, complete } = await setup(() => 'Yes, that is accurate (Qur’an 5:55).');
+    const target = fakeMessage('Verse 5:55 is about wilayah');
+    const ping = mentionMessage('<@999999999999999999> yo', {
+      reference: { messageId: target.message.id },
+      fetchReference: vi.fn().mockResolvedValue(target.message),
+    });
+    service.handle(ping.message);
+    await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
+    expect(service.queued).toBe(0);
+    const request = complete.mock.calls[0]![0];
+    expect(request).toMatchObject({ pool: 'verify', webSearch: { extraTokens: 3_000 } });
+    expect(request.json).toBeUndefined();
+    expect(request.messages[1]!.content).toContain('Verse 5:55 is about wilayah');
+    expect(ping.reply.mock.calls[0]![0]).toMatchObject({
+      content: 'Yes, that is accurate (Qur’an 5:55).',
+      allowedMentions: { parse: [], repliedUser: false },
+    });
+    expect(service.stats.mentions).toBe(1);
+    service.stop();
+  });
+
+  it('hides links when answering a mention in #tts', async () => {
+    const { service } = await setup(
+      () => 'Yes, 680 CE.\n<https://www.britannica.com/event/Battle-of-Karbala>',
+    );
+    const ping = mentionMessage('<@999999999999999999> when was Karbala?', {
+      channel: {
+        name: 'tts',
+        parentId: null,
+        isThread: () => false,
+        permissionsFor: () => ({ has: () => true }),
+        messages: { fetch: vi.fn().mockResolvedValue(new Map()) },
+      },
+    });
+    service.handle(ping.message);
+    await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
+    expect(ping.reply.mock.calls[0]![0].content).toBe('Yes, 680 CE.');
+    service.stop();
+  });
+
+  it('tells the user when a mention cannot be answered', async () => {
+    const { service } = await setup(() => {
+      throw new Error('provider down');
+    });
+    const ping = mentionMessage('<@999999999999999999> is this true?');
+    service.handle(ping.message);
+    await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
+    expect(ping.reply.mock.calls[0]![0].content).toContain("couldn't answer");
+    service.stop();
+  });
+
+  it('ignores mentions while paused', async () => {
+    const { service, complete, config } = await setup(() => 'hi');
+    await config.set('enabled', false);
+    service.handle(mentionMessage('<@999999999999999999> yo').message);
+    await service.flush();
+    expect(complete).not.toHaveBeenCalled();
+    service.stop();
+  });
+
+  it('does not post a confident correction that lacks evidence', async () => {
+    const { service, complete } = await setup((request) =>
+      request.pool === 'screen'
+        ? '{"check":[1]}'
+        : '{"incorrect":true,"confidence":0.97,"claim":"c","correction":"Australia is around 0.2 per 100,000."}',
+    );
+    const claim = fakeMessage('Australia has a higher recorded rape rate than Pakistan');
+    service.handle(claim.message);
+    await service.flush();
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(service.stats.unsupported).toBe(1));
+    expect(claim.reply).not.toHaveBeenCalled();
+    service.stop();
+  });
+
   it('respects the per-channel cooldown after posting a correction', async () => {
     const { service } = await setup((request) =>
       request.pool === 'screen'
         ? '{"check":[1,2]}'
-        : '{"incorrect":true,"confidence":0.99,"claim":"c","correction":"Fixed."}',
+        : '{"incorrect":true,"confidence":0.99,"claim":"c","correction":"Fixed.","evidence":[{"source":"https://example.org/fact","quote":"A quoted passage that shows it."}]}',
     );
     const a = fakeMessage('The moon is made entirely of cheese, scientists say');
     const b = fakeMessage('Mount Everest is the shortest mountain on Earth');

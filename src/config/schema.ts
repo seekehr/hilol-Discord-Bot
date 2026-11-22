@@ -39,6 +39,17 @@ export const configSchema = z
       channelCooldownSeconds: integer(0, 86_400),
       maxPerBatch: integer(1, 10),
       contextMessages: integer(0, 20),
+      // Channel names (without #) where replies show no links, e.g. text-to-speech channels.
+      noLinkChannels: z
+        .array(
+          z
+            .string()
+            .trim()
+            .toLowerCase()
+            .regex(/^[^\s#]{1,100}$/, 'Use a channel name without #'),
+        )
+        .max(50)
+        .default(['tts']),
     }),
     ai: z.strictObject({
       screenModel: z.string().trim().min(1).max(150),
@@ -92,6 +103,7 @@ export const defaultConfig: BotConfig = {
     channelCooldownSeconds: 60,
     maxPerBatch: 2,
     contextMessages: 4,
+    noLinkChannels: ['tts'],
   },
   ai: {
     screenModel: 'openai/gpt-oss-20b',

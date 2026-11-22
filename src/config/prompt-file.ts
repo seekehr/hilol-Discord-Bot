@@ -9,6 +9,7 @@ export const defaultGuidelines = `Scope
 - Do not correct opinions, interpretations, beliefs, predictions, jokes, sarcasm, rhetorical exaggeration or questions.
 - Do not treat a theological position as false merely because it differs from the Shi'a view. Correct it only if it misstates a source, a historical fact or what a school actually holds.
 - If reliable sources genuinely disagree, the statement is not objectively false: leave it alone.
+- Statistics: only correct a figure using a source for the same measure, place, definition and year. Rape is not sexual assault, and police-recorded rates in different countries are not comparable. Never estimate or calculate figures. If the evidence is insufficient, stay silent.
 
 Sources
 - Statistics: prefer primary and official sources such as the UN, World Bank, WHO, national statistics offices, Pew Research Center and Our World in Data. Give the year of the figure.
@@ -22,7 +23,10 @@ Perspective
 - Objectivity comes first: never misstate what any source says, never invent a source, reference or number, and do not post a correction you could not verify.
 
 Tone
-- Be brief, respectful and non-confrontational. Correct the statement, not the person.`;
+- Be brief, respectful and non-confrontational. Correct the statement, not the person.
+
+Channels
+- In #tts, keep corrections very brief and to the point: ideally one short sentence and a single source, unless more detail is genuinely necessary to correct the claim.`;
 
 export function validatePrompt(text: string): string {
   const prompt = text.trim();

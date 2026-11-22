@@ -2,7 +2,7 @@
 
 [![Discord members](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FCWCPwmPyJb%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=discord&suffix=%20members&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/CWCPwmPyJb)
 
-An AI-powered fact-checker for your Discord server, powered by Groq. It reads every message in the server and replies **only** when someone makes an objectively incorrect statement: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs, jokes and questions are left alone, and it never pings anyone.
+An AI-powered fact-checker for your Discord server, powered by Groq. It reads every message in the server and replies when someone makes an objectively incorrect statement: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs, jokes and questions are left alone, and it never pings anyone. You can also @mention it to ask a question or to fact-check a message you reply to.
 
 It checks claims with web search. For Islamic topics it draws especially on the Qur'an, hadith collections, and the works of Shi'a scholars. It presents the Shi'a scholarly position where relevant, but it never misstates a source and never posts a correction it could not verify.
 
@@ -13,6 +13,7 @@ Built for one server per bot instance.
 1. **Screening.** Messages of at least 20 characters are queued and screened in batches of up to 10 (or every 30 seconds) by a fast model (`openai/gpt-oss-20b`). The model flags messages that contain a checkable factual claim that may be wrong.
 2. **Verification.** Each flagged message is checked by a larger model (`openai/gpt-oss-120b`) using Groq's built-in browser search. It gets the few preceding messages as context.
 3. **Correction.** The bot replies only if the verifier says the statement is incorrect with confidence of at least 0.85. After a correction, that channel has a 60-second cooldown. Errors are logged, never posted in chat.
+4. **Mentions.** If you @mention the bot, it always replies, using the verification model with web search. Reply to a message and mention it to get that message fact-checked, or mention it with a question. Mentions skip the length minimum and channel cooldown but still count toward the per-user limit and the verification budget. If it can't answer (for example because the budget is used up), it says so.
 
 ## Setup
 
@@ -76,6 +77,7 @@ Settings live in `config/bot.json`; see the [example](config/bot.example.json). 
 | `screening.userChecksPerMinute`                   | `6`                | Per-user cap so one person can't drain the budget          |
 | `corrections.minConfidence`                       | `0.85`             | Minimum verifier confidence to post                        |
 | `corrections.channelCooldownSeconds`              | `60`               | Quiet time per channel after a correction                  |
+| `corrections.noLinkChannels`                      | `["tts"]`          | Channel names whose replies omit the Citation links        |
 | `ai.screenModel`, `ai.verifyModel`                | gpt-oss-20b / 120b | Groq models for each stage                                 |
 | `ai.webSearch`                                    | `true`             | Use Groq browser search during verification                |
 

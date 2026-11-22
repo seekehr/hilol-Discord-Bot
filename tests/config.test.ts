@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ConfigStore } from '../src/config/store.js';
 import { defaultConfig } from '../src/config/schema.js';
@@ -30,6 +30,18 @@ describe('configuration', () => {
     await restored.load();
     expect(restored.current.ai.verifyModel).toBe('test-model');
     expect(restored.current.corrections.minConfidence).toBe(0.9);
+  });
+
+  it('regenerates the default guidelines file exactly when it is deleted', async () => {
+    const path = await temporaryPath('bot.json');
+    const prompt = join(dirname(path), 'factcheck.txt');
+    const store = new ConfigStore(path);
+    await store.load();
+    const original = await readFile(prompt, 'utf8');
+    expect(original).toBe(`${defaultGuidelines}\n`);
+    await rm(prompt);
+    await new ConfigStore(path).load();
+    expect(await readFile(prompt, 'utf8')).toBe(original);
   });
 
   it('reads manual edits to the guidelines file', async () => {

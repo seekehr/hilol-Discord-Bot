@@ -19,7 +19,8 @@
     "minConfidence": 0.85,
     "channelCooldownSeconds": 60,
     "maxPerBatch": 2,
-    "contextMessages": 4
+    "contextMessages": 4,
+    "noLinkChannels": ["tts"]
   },
   "ai": {
     "screenModel": "openai/gpt-oss-20b",

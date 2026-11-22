@@ -17,6 +17,8 @@ const packageInfo = createRequire(import.meta.url)('../../package.json') as {
 
 const help = `I read messages in this server and reply only when someone states something objectively incorrect: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs and jokes are left alone. I never ping anyone.
 
+Mention me to ask a question, or reply to a message and mention me to have it fact-checked.
+
 Messages are screened in small batches, and flagged claims are checked with web search before I post anything. Guidelines (scope, sources, perspective, tone) are in the promptFile text file in the config directory.
 
 Bot owners: /config show|set|reload, /ignore user time, /unignore user, /status, /about, /stop, /help.
@@ -103,7 +105,7 @@ export class InteractionService {
             return `${usage.requests}/${limits.requestsPerDay} requests, ${usage.reservedTokens}/${limits.tokensPerDay} tokens${blocked}`;
           };
           await interaction.editReply({
-            content: `Fact-checking: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.screened} messages screened, ${stats.flagged} flagged, ${stats.verified} verified, ${stats.corrections} corrections posted, ${stats.dropped} dropped from a full queue\nQueued: ${this.factCheck.queued}\nScreening budget (24h, ${config.ai.screenModel}): ${budget('screen')}\nVerification budget (24h, ${config.ai.verifyModel}): ${budget('verify')}\nActive ignores: ${this.state.activeIgnores()}`,
+            content: `Fact-checking: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.screened} messages screened, ${stats.flagged} flagged, ${stats.verified} verified, ${stats.corrections} corrections posted, ${stats.unsupported} dropped for lacking evidence, ${stats.mentions} mentions answered, ${stats.dropped} dropped from a full queue\nQueued: ${this.factCheck.queued}\nScreening budget (24h, ${config.ai.screenModel}): ${budget('screen')}\nVerification budget (24h, ${config.ai.verifyModel}): ${budget('verify')}\nActive ignores: ${this.state.activeIgnores()}`,
             allowedMentions: { parse: [] },
           });
           return;

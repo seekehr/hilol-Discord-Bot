@@ -9,10 +9,15 @@ import { RateLimitError } from '../core/rate-limit-error.js';
 import { errorDetails } from '../core/errors.js';
 import {
   formatCorrection,
+  hasEvidence,
+  hasLink,
+  mentionPrompt,
   parseScreening,
+  withCitations,
   parseVerdict,
   screeningPrompt,
   verificationPrompt,
+  type ChannelInfo,
   type ChatLine,
 } from './prompts.js';
 
@@ -21,11 +26,28 @@ const toLine = (message: Message): ChatLine => ({
   text: message.cleanContent,
 });
 
+/** Whether replies in this channel (or its parent, for threads) may show links. */
+const linksAllowed = (message: Message, config: BotConfig): boolean => {
+  const info = channelInfo(message);
+  const hidden = config.corrections.noLinkChannels;
+  return !info || ![info.name, info.parent].some((n) => !!n && hidden.includes(n.toLowerCase()));
+};
+
+const channelInfo = (message: Message): ChannelInfo | undefined => {
+  const channel = message.channel;
+  if (!('name' in channel) || !channel.name) return undefined;
+  const parent = channel.isThread() ? channel.parent?.name : undefined;
+  return { name: channel.name, parent };
+};
+
 /**
- * Watches every readable channel and replies only when a message contains an
+ * Watches every readable channel and replies when a message contains an
  * objectively incorrect statement. Messages are screened cheaply in batches; only
  * flagged ones are verified with web search, and nothing is posted unless the
- * verifier is confident. It never reports errors in chat.
+ * verifier is confident. Passive checks never report errors in chat.
+ *
+ * When someone @mentions the bot it always replies: it fact-checks the message
+ * they replied to, or answers their question.
  */
 export class FactCheckService {
   private queue: Message[] = [];
@@ -35,7 +57,15 @@ export class FactCheckService {
   private controller = new AbortController();
   private readonly limiter: UserRateLimiter;
   private readonly cooldownUntil = new Map<string, number>();
-  readonly stats = { screened: 0, flagged: 0, verified: 0, corrections: 0, dropped: 0 };
+  readonly stats = {
+    screened: 0,
+    flagged: 0,
+    verified: 0,
+    corrections: 0,
+    unsupported: 0,
+    mentions: 0,
+    dropped: 0,
+  };
 
   constructor(
     private readonly guildId: string,
@@ -56,6 +86,10 @@ export class FactCheckService {
     if (!this.eligible(message)) return;
     const config = this.config.current;
     if (!this.channelAllowed(message, config)) return;
+    if (this.mentionsMe(message)) {
+      void this.answerMention(message);
+      return;
+    }
     if (message.content.trim().length < config.screening.minMessageChars) return;
     if (!this.limiter.allow(message.author.id, config.screening.userChecksPerMinute)) return;
     this.queue.push(message);
@@ -121,6 +155,7 @@ export class FactCheckService {
   private async verify(message: Message, signal: AbortSignal): Promise<void> {
     const config = this.config.current;
     if (!this.ready(message, config)) return;
+    const links = linksAllowed(message, config);
     try {
       const output = await this.ai.complete(
         {
@@ -132,6 +167,8 @@ export class FactCheckService {
             await this.context(message, config.corrections.contextMessages),
             config.screening.maxMessageChars,
             config.ai.webSearch,
+            channelInfo(message),
+            links,
           ),
           maxOutputTokens: config.ai.verifyMaxOutputTokens,
           json: true,
@@ -150,10 +187,18 @@ export class FactCheckService {
         !verdict.correction.trim()
       )
         return;
+      if (!hasEvidence(verdict, message.cleanContent) || (links && !hasLink(verdict))) {
+        this.stats.unsupported++;
+        this.logger.info(
+          { channelId: message.channelId, messageId: message.id, confidence: verdict.confidence },
+          'Dropped correction without supporting evidence',
+        );
+        return;
+      }
       // Settings, ignores, permissions or the message itself may have changed meanwhile.
       if (signal.aborted || !this.ready(message, this.config.current)) return;
       await message.reply({
-        content: formatCorrection(verdict),
+        content: formatCorrection(verdict, links),
         allowedMentions: { parse: [], repliedUser: false },
         failIfNotExists: true,
         flags: MessageFlags.SuppressEmbeds,
@@ -169,6 +214,71 @@ export class FactCheckService {
       );
     } catch (error) {
       this.report(error, signal, 'Verification failed');
+    }
+  }
+
+  /** A direct @mention (or a pinging reply to the bot), not @everyone or a role. */
+  private mentionsMe(message: Message): boolean {
+    const me = message.client?.user?.id;
+    return !!me && message.mentions.has(me, { ignoreEveryone: true, ignoreRoles: true });
+  }
+
+  /** Someone pinged the bot: always answer, unlike passive fact-checking. */
+  private async answerMention(message: Message): Promise<void> {
+    const config = this.config.current;
+    if (!this.canSend(message)) return;
+    const links = linksAllowed(message, config);
+    const signal = this.controller.signal;
+    const reply = (content: string) =>
+      message.reply({
+        content,
+        allowedMentions: { parse: [], repliedUser: false },
+        flags: MessageFlags.SuppressEmbeds,
+      });
+    try {
+      if (!this.limiter.allow(message.author.id, config.screening.userChecksPerMinute)) {
+        await reply('You are pinging me too fast. Try again in a minute.');
+        return;
+      }
+      if ('sendTyping' in message.channel) void message.channel.sendTyping().catch(() => {});
+      const referenced = message.reference?.messageId
+        ? await message.fetchReference().catch(() => undefined)
+        : undefined;
+      const output = await this.ai.complete(
+        {
+          pool: 'verify',
+          model: config.ai.verifyModel,
+          messages: mentionPrompt(
+            await this.config.readPrompt(),
+            message.client.user.displayName,
+            toLine(message),
+            referenced?.content.trim() ? toLine(referenced) : undefined,
+            await this.context(message, config.corrections.contextMessages),
+            config.screening.maxMessageChars,
+            config.ai.webSearch,
+            channelInfo(message),
+            links,
+          ),
+          maxOutputTokens: config.ai.verifyMaxOutputTokens,
+          ...(config.ai.webSearch
+            ? { webSearch: { extraTokens: config.ai.searchTokenAllowance } }
+            : {}),
+        },
+        config,
+        signal,
+      );
+      if (signal.aborted || this.stopped) return;
+      await reply(withCitations(output, [], links));
+      this.stats.mentions++;
+      this.logger.info({ channelId: message.channelId, messageId: message.id }, 'Answered mention');
+    } catch (error) {
+      if (signal.aborted || this.stopped) return;
+      this.report(error, signal, 'Mention reply failed');
+      const text =
+        error instanceof RateLimitError
+          ? `I'm out of API budget right now. Try again in ${error.retryAfterSeconds}s.`
+          : "Sorry, I couldn't answer that right now. Try again later.";
+      await reply(text).catch(() => {});
     }
   }
 
