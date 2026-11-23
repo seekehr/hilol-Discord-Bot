@@ -16,6 +16,7 @@ import {
   withCitations,
   parseVerdict,
   screeningPrompt,
+  spoken,
   verificationPrompt,
   type ChannelInfo,
   type ChatLine,
@@ -275,9 +276,16 @@ export class FactCheckService {
           config,
           signal,
         );
+      // In read-aloud channels (no links) the reply is one short spoken line, no note.
+      const post = (output: string, searched: boolean) =>
+        !links
+          ? spoken(output)
+          : searched
+            ? withCitations(output, [], true)
+            : withCitations(output, [], false, NO_SEARCH_NOTE);
       let text: string;
       try {
-        text = withCitations(await ask(config.ai.webSearch), [], links);
+        text = post(await ask(config.ai.webSearch), config.ai.webSearch);
       } catch (error) {
         // Search failed (usually budget): answer without search on the cheaper model, then
         // OpenRouter, rather than refusing. Links are dropped because without search they
@@ -285,7 +293,7 @@ export class FactCheckService {
         if (signal.aborted || !config.ai.webSearch) throw error;
         this.logger.info(errorDetails(error), 'Search unavailable; answering without search');
         try {
-          text = withCitations(await ask(false), [], false, NO_SEARCH_NOTE);
+          text = post(await ask(false), false);
         } catch {
           // Report the original error: the search budget is what the user is waiting for.
           throw error;

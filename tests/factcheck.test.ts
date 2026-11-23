@@ -12,6 +12,9 @@ import {
   safeReply,
   parseVerdict,
   screeningPrompt,
+  spoken,
+  SPOKEN_MAX_CHARS,
+  SPOKEN_MAX_WORDS,
   verificationPrompt,
   withCitations,
 } from '../src/factcheck/prompts.js';
@@ -87,6 +90,61 @@ describe('prompts and parsing', () => {
     expect(mention!.content).toContain('at most ONE search and open at most TWO pages');
   });
 
+  it('makes read-aloud (no-link) channels answer in one short sentence', () => {
+    const prompt = (links: boolean) =>
+      verificationPrompt('', { author: 'A', text: 'B' }, [], 100, true, { name: 'tts' }, links)[0]!
+        .content;
+    const correction = prompt(false);
+    expect(correction).toContain(
+      `at most ${SPOKEN_MAX_WORDS} words (${SPOKEN_MAX_CHARS} characters)`,
+    );
+    expect(correction).not.toContain('900 characters');
+    const mention = mentionPrompt(
+      '',
+      'Bot',
+      { author: 'A', text: 'B' },
+      undefined,
+      [],
+      100,
+      true,
+      {
+        name: 'tts',
+      },
+      false,
+    )[0]!.content;
+    expect(mention).toContain(`at most ${SPOKEN_MAX_WORDS} words (${SPOKEN_MAX_CHARS} characters)`);
+    expect(mention).not.toContain('1500 characters');
+    expect(prompt(true)).not.toContain('text-to-speech');
+  });
+
+  it('answers a plain question instead of giving it a verdict when nothing is replied to', () => {
+    const request = { author: 'Seeker', text: 'what is omnipotence paradox' };
+    const ask = (repliedTo?: { author: string; text: string }) =>
+      mentionPrompt('', 'Bot', request, repliedTo, [], 100, true)[0]!.content;
+    expect(ask()).toContain('Never open with a verdict such as "Accurate"');
+    expect(ask()).not.toContain('fact-check it: say clearly whether it is accurate');
+    const replying = ask({ author: 'A', text: 'Verse 5:55 is about wilayah' });
+    expect(replying).toContain('fact-check it: say clearly whether it is accurate');
+    expect(replying).not.toContain('Never open with a verdict');
+  });
+
+  it('trims read-aloud replies to whole short sentences without markdown or links', () => {
+    // The second sentence alone is longer than the limit, whatever the limit is set to.
+    const long =
+      '**No.** The Battle of Karbala was in 680 CE (61 AH), per al-Tabari. ' +
+      `It took place on 10 Muharram near the Euphrates, ${'and the sources describe it at length '.repeat(SPOKEN_MAX_CHARS / 30)}over the centuries.\n` +
+      '- <https://example.com/karbala>';
+    const text = spoken(long);
+    expect(text).toBe('No. The Battle of Karbala was in 680 CE (61 AH), per al-Tabari.');
+    expect(spoken('word '.repeat(SPOKEN_MAX_CHARS)).length).toBeLessThanOrEqual(SPOKEN_MAX_CHARS);
+    expect(
+      formatCorrection(
+        { incorrect: true, confidence: 1, claim: '', correction: long, evidence: [] },
+        false,
+      ),
+    ).toBe('Fact check: No. The Battle of Karbala was in 680 CE (61 AH), per al-Tabari.');
+  });
+
   it('tells the verifier which channel the message is in', () => {
     const prompt = (channel?: { name: string; parent?: string }) =>
       verificationPrompt('', { author: 'A', text: 'B' }, [], 100, true, channel)[0]!.content;
@@ -158,7 +216,7 @@ describe('prompts and parsing', () => {
     expect(formatCorrection(verdict)).toBe(
       '**Fact check:** Al-Kafi says otherwise.\n\n**Citation**\n<https://thaqalayn.net/hadith/1/1/1/1>',
     );
-    expect(formatCorrection(verdict, false)).toBe('**Fact check:** Al-Kafi says otherwise.');
+    expect(formatCorrection(verdict, false)).toBe('Fact check: Al-Kafi says otherwise.');
   });
 
   it('strips search citation markers from replies', () => {
