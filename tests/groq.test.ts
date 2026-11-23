@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { GroqProvider, retryAfterMilliseconds, type CompletionRequest } from '../src/ai/groq.js';
 import { StateStore } from '../src/storage/state-store.js';
 import { defaultConfig } from '../src/config/schema.js';
+import { errorDetails, publicError } from '../src/core/errors.js';
 import { temporaryPath } from './helpers.js';
 
 const screen: CompletionRequest = {
@@ -98,6 +99,52 @@ describe('Groq transport', () => {
     await expect(provider.complete(screen, config)).rejects.toThrow('empty reply');
     await expect(provider.complete(screen, config)).rejects.toThrow('unreadable response');
     await expect(provider.complete(screen, config)).rejects.toThrow('could not be reached');
+  });
+
+  it('retries failed generations and logs Groq’s reason without exposing it to users', async () => {
+    const state = await stateStore();
+    const failed = () =>
+      Response.json(
+        {
+          error: {
+            message: 'Failed to call a function. Please adjust your prompt.',
+            type: 'invalid_request_error',
+            code: 'tool_use_failed',
+          },
+        },
+        { status: 400 },
+      );
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(failed())
+      .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: 'Recovered' } }] }))
+      .mockResolvedValueOnce(failed())
+      .mockResolvedValueOnce(failed())
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              message: 'model `x` does not support browser_search',
+              code: 'model_not_found',
+            },
+          },
+          { status: 400 },
+        ),
+      );
+    const provider = new GroqProvider('test-secret', state, request);
+    expect(await provider.complete(verify, defaultConfig)).toBe('Recovered');
+    const generation = await provider.complete(verify, defaultConfig).catch((e: unknown) => e);
+    expect(errorDetails(generation)).toEqual({
+      kind: 'ProviderError',
+      reason: "Groq's model openai/gpt-oss-120b failed to produce a usable reply. Try again.",
+      detail: 'HTTP 400: tool_use_failed: Failed to call a function. Please adjust your prompt.',
+    });
+    expect(publicError(generation)).not.toContain('Failed to call');
+    const rejected = await provider.complete(verify, defaultConfig).catch((e: unknown) => e);
+    expect(errorDetails(rejected).detail).toBe(
+      'HTTP 400: model_not_found: model `x` does not support browser_search',
+    );
+    expect(request).toHaveBeenCalledTimes(5);
   });
 
   it('parses both Retry-After formats', () => {

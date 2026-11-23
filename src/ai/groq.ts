@@ -1,7 +1,7 @@
 import type { ChatMessage } from './types.js';
 import type { BotConfig, BudgetPool } from '../config/schema.js';
 import { StateStore } from '../storage/state-store.js';
-import { UserError } from '../core/errors.js';
+import { ProviderError, UserError } from '../core/errors.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { estimateRequestTokens, reportedUsageTokens } from './tokens.js';
 import { RateLimitError } from '../core/rate-limit-error.js';
@@ -28,6 +28,38 @@ export function retryAfterMilliseconds(value: string | null, now = Date.now()): 
 }
 
 const reasoningModels = ['openai/gpt-oss-20b', 'openai/gpt-oss-120b'];
+
+// Groq error codes for a generation that went wrong rather than a bad request.
+const generationFailures = ['tool_use_failed', 'json_validate_failed', 'output_parse_failed'];
+
+/** Groq's error code and message, for logs. Never posted in chat. */
+async function groqProblem(response: Response): Promise<{ code: string; text: string }> {
+  let raw = '';
+  try {
+    raw = (await response.text()).slice(0, 20_000);
+  } catch {
+    return { code: '', text: `HTTP ${response.status}` };
+  }
+  let error: { code?: unknown; type?: unknown; message?: unknown } | undefined;
+  try {
+    error = (JSON.parse(raw) as { error?: typeof error }).error;
+  } catch {
+    // Not JSON; fall back to the raw text.
+  }
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const message = typeof error?.message === 'string' ? error.message : raw;
+  const text = [
+    `HTTP ${response.status}`,
+    code || (typeof error?.type === 'string' ? error.type : ''),
+    message,
+  ]
+    .filter(Boolean)
+    .join(': ')
+    .replace(/\s+/g, ' ')
+    .replace(/gsk_[A-Za-z0-9]+/g, 'gsk_[redacted]')
+    .slice(0, 500);
+  return { code, text };
+}
 
 export class GroqProvider implements Completer {
   constructor(
@@ -81,16 +113,31 @@ export class GroqProvider implements Completer {
         throw new RateLimitError('provider', wait / 1_000, 'cooldown');
       }
       if (!response.ok) {
-        await response.body?.cancel();
-        if (response.status >= 500 && attempt < maxRetries) {
+        const rejected = response.status === 400 || response.status === 404;
+        const problem = rejected ? await groqProblem(response) : undefined;
+        if (!rejected) await response.body?.cancel();
+        // The model sometimes botches a tool call or its output; another attempt usually works.
+        const failedGeneration = generationFailures.includes(problem?.code ?? '');
+        // A failed generation produced no reply, so release the reserved output and search
+        // tokens (keeping the input estimate). Otherwise the retry would not fit the budget.
+        if (failedGeneration)
+          await this.state.settle(reservationId, estimateRequestTokens(messages, model, 0));
+        const transient = response.status >= 500 || failedGeneration;
+        if (transient && attempt < maxRetries) {
           await delay(500 * 2 ** attempt, undefined, { signal });
           continue;
         }
         if ([401, 403].includes(response.status))
           throw new UserError('Groq access failed. Check the API key and model permissions.');
-        if (response.status === 400 || response.status === 404)
-          throw new UserError(
+        if (problem && generationFailures.includes(problem.code))
+          throw new ProviderError(
+            `Groq's model ${model} failed to produce a usable reply. Try again.`,
+            problem.text,
+          );
+        if (rejected)
+          throw new ProviderError(
             `Groq rejected the request for model ${model}. Check the model name and whether it supports web search.`,
+            problem?.text,
           );
         throw new UserError('Groq is temporarily unavailable.');
       }

@@ -9,7 +9,7 @@ export const defaultGuidelines = `Scope
 - Do not correct opinions, interpretations, beliefs, predictions, jokes, sarcasm, rhetorical exaggeration or questions.
 - Do not treat a theological position as false merely because it differs from the Shi'a view. Correct it only if it misstates a source, a historical fact or what a school actually holds.
 - If reliable sources genuinely disagree, the statement is not objectively false: leave it alone.
-- Statistics: only correct a figure using a source for the same measure, place, definition and year. Rape is not sexual assault, and police-recorded rates in different countries are not comparable. Never estimate or calculate figures. If the evidence is insufficient, stay silent.
+- Statistics: compare like with like (same measure and year; rape is not sexual assault) and never estimate or calculate figures. When asked to compare countries, give the official figures and say which is higher, noting definition differences briefly instead of refusing.
 
 Sources
 - Statistics: prefer primary and official sources such as the UN, World Bank, WHO, national statistics offices, Pew Research Center and Our World in Data. Give the year of the figure.
