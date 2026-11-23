@@ -55,7 +55,10 @@ describe('Groq transport', () => {
       .fn<typeof fetch>()
       .mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' } }] }));
     await new GroqProvider('test-secret', state, request).complete(verify, defaultConfig);
-    expect(body(request)).toMatchObject({ tools: [{ type: 'browser_search' }] });
+    expect(body(request)).toMatchObject({
+      tools: [{ type: 'browser_search' }],
+      parallel_tool_calls: false,
+    });
     expect(body(request)).not.toHaveProperty('response_format');
     expect(state.usage('verify').reservedTokens).toBeGreaterThan(3_400);
   });

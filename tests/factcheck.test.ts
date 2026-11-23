@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import type { Message } from 'discord.js';
-import { FactCheckService } from '../src/factcheck/service.js';
+import { FactCheckService, NO_SEARCH_NOTE } from '../src/factcheck/service.js';
+import { RateLimitError } from '../src/core/rate-limit-error.js';
 import {
   formatCorrection,
   hasEvidence,
   hasLink,
+  mentionPrompt,
   parseScreening,
   safeReply,
   parseVerdict,
@@ -71,7 +73,18 @@ describe('prompts and parsing', () => {
       true,
     );
     expect(system!.content).toContain('Use Shi’a sources.');
-    expect(system!.content).toContain('Search the web');
+    expect(system!.content).toContain('search the web');
+    expect(system!.content).toContain('at most ONE search and open at most TWO pages');
+    const [mention] = mentionPrompt(
+      '',
+      'Bot',
+      { author: 'A', text: 'B' },
+      undefined,
+      [],
+      100,
+      true,
+    );
+    expect(mention!.content).toContain('at most ONE search and open at most TWO pages');
   });
 
   it('tells the verifier which channel the message is in', () => {
@@ -342,6 +355,34 @@ describe('fact-check service', () => {
     service.handle(ping.message);
     await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
     expect(ping.reply.mock.calls[0]![0].content).toContain("couldn't answer");
+    service.stop();
+  });
+
+  it('answers a mention without search on the screening model when the search budget is out', async () => {
+    const { service, complete } = await setup((request) => {
+      if (request.pool === 'verify') throw new RateLimitError('day', 8_804, 'tokens');
+      return 'Karbala was in 680 CE.\n<https://example.com/made-up>';
+    });
+    const ping = mentionMessage('<@999999999999999999> when was Karbala?');
+    service.handle(ping.message);
+    await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
+    const fallback = complete.mock.calls[1]![0];
+    expect(fallback).toMatchObject({ pool: 'screen', model: 'openai/gpt-oss-20b' });
+    expect(fallback.webSearch).toBeUndefined();
+    expect(fallback.messages[0]!.content).toContain('no web access');
+    expect(ping.reply.mock.calls[0]![0].content).toBe(`${NO_SEARCH_NOTE}Karbala was in 680 CE.`);
+    expect(service.stats).toMatchObject({ mentions: 1, fallbacks: 1 });
+    service.stop();
+  });
+
+  it('reports the search budget wait when the fallback budget is out too', async () => {
+    const { service } = await setup((request) => {
+      throw new RateLimitError('day', request.pool === 'verify' ? 8_804 : 30, 'tokens');
+    });
+    const ping = mentionMessage('<@999999999999999999> when was Karbala?');
+    service.handle(ping.message);
+    await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
+    expect(ping.reply.mock.calls[0]![0].content).toContain('Try again in 8804s');
     service.stop();
   });
 

@@ -21,6 +21,8 @@ import {
   type ChatLine,
 } from './prompts.js';
 
+export const NO_SEARCH_NOTE = '-# Web search budget used up, so this answer is unsearched.\n';
+
 const toLine = (message: Message): ChatLine => ({
   author: message.member?.displayName ?? message.author.displayName,
   text: message.cleanContent,
@@ -64,6 +66,7 @@ export class FactCheckService {
     corrections: 0,
     unsupported: 0,
     mentions: 0,
+    fallbacks: 0,
     dropped: 0,
   };
 
@@ -244,31 +247,49 @@ export class FactCheckService {
       const referenced = message.reference?.messageId
         ? await message.fetchReference().catch(() => undefined)
         : undefined;
-      const output = await this.ai.complete(
-        {
-          pool: 'verify',
-          model: config.ai.verifyModel,
-          messages: mentionPrompt(
-            await this.config.readPrompt(),
-            message.client.user.displayName,
-            toLine(message),
-            referenced?.content.trim() ? toLine(referenced) : undefined,
-            await this.context(message, config.corrections.contextMessages),
-            config.screening.maxMessageChars,
-            config.ai.webSearch,
-            channelInfo(message),
-            links,
-          ),
-          maxOutputTokens: config.ai.verifyMaxOutputTokens,
-          ...(config.ai.webSearch
-            ? { webSearch: { extraTokens: config.ai.searchTokenAllowance } }
-            : {}),
-        },
-        config,
-        signal,
-      );
+      const guidelines = await this.config.readPrompt();
+      const context = await this.context(message, config.corrections.contextMessages);
+      const ask = (webSearch: boolean) =>
+        this.ai.complete(
+          {
+            // The screening model has its own Groq budget, used only by cheap batch screens.
+            pool: webSearch ? 'verify' : 'screen',
+            model: webSearch ? config.ai.verifyModel : config.ai.screenModel,
+            messages: mentionPrompt(
+              guidelines,
+              message.client.user.displayName,
+              toLine(message),
+              referenced?.content.trim() ? toLine(referenced) : undefined,
+              context,
+              config.screening.maxMessageChars,
+              webSearch,
+              channelInfo(message),
+              links,
+            ),
+            maxOutputTokens: config.ai.verifyMaxOutputTokens,
+            ...(webSearch ? { webSearch: { extraTokens: config.ai.searchTokenAllowance } } : {}),
+          },
+          config,
+          signal,
+        );
+      let text: string;
+      try {
+        text = withCitations(await ask(config.ai.webSearch), [], links);
+      } catch (error) {
+        // Out of search budget: answer without search on the cheaper model rather than
+        // refusing. Links are dropped because without search they would come from memory.
+        if (!(error instanceof RateLimitError) || !config.ai.webSearch) throw error;
+        this.logger.info(errorDetails(error), 'Search budget exhausted; answering without search');
+        try {
+          text = withCitations(await ask(false), [], false, NO_SEARCH_NOTE);
+        } catch (fallbackError) {
+          // Report the original wait: the search budget is what the user is waiting for.
+          throw fallbackError instanceof RateLimitError ? error : fallbackError;
+        }
+        this.stats.fallbacks++;
+      }
       if (signal.aborted || this.stopped) return;
-      await reply(withCitations(output, [], links));
+      await reply(text);
       this.stats.mentions++;
       this.logger.info({ channelId: message.channelId, messageId: message.id }, 'Answered mention');
     } catch (error) {

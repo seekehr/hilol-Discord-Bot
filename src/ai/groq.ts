@@ -92,7 +92,10 @@ export class GroqProvider implements Completer {
             ...(reasoningModels.includes(model)
               ? { reasoning_effort: 'low', include_reasoning: false }
               : {}),
-            ...(webSearch ? { tools: [{ type: 'browser_search' }] } : {}),
+            // One tool call at a time, so the model cannot fan out several searches at once.
+            ...(webSearch
+              ? { tools: [{ type: 'browser_search' }], parallel_tool_calls: false }
+              : {}),
             // Groq does not allow JSON mode together with browser search.
             ...(json && !webSearch ? { response_format: { type: 'json_object' } } : {}),
           }),

@@ -105,7 +105,7 @@ export class InteractionService {
             return `${usage.requests}/${limits.requestsPerDay} requests, ${usage.reservedTokens}/${limits.tokensPerDay} tokens${blocked}`;
           };
           await interaction.editReply({
-            content: `Fact-checking: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.screened} messages screened, ${stats.flagged} flagged, ${stats.verified} verified, ${stats.corrections} corrections posted, ${stats.unsupported} dropped for lacking evidence, ${stats.mentions} mentions answered, ${stats.dropped} dropped from a full queue\nQueued: ${this.factCheck.queued}\nScreening budget (24h, ${config.ai.screenModel}): ${budget('screen')}\nVerification budget (24h, ${config.ai.verifyModel}): ${budget('verify')}\nActive ignores: ${this.state.activeIgnores()}`,
+            content: `Fact-checking: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.screened} messages screened, ${stats.flagged} flagged, ${stats.verified} verified, ${stats.corrections} corrections posted, ${stats.unsupported} dropped for lacking evidence, ${stats.mentions} mentions answered (${stats.fallbacks} without search), ${stats.dropped} dropped from a full queue\nQueued: ${this.factCheck.queued}\nScreening budget (24h, ${config.ai.screenModel}): ${budget('screen')}\nVerification budget (24h, ${config.ai.verifyModel}): ${budget('verify')}\nActive ignores: ${this.state.activeIgnores()}`,
             allowedMentions: { parse: [] },
           });
           return;
