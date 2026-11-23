@@ -2,98 +2,86 @@
 
 [![Discord members](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FCWCPwmPyJb%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=discord&suffix=%20members&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/CWCPwmPyJb)
 
-An AI-powered fact-checker for your Discord server, powered by Groq. It reads every message in the server and replies when someone makes an objectively incorrect statement: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs, jokes and questions are left alone, and it never pings anyone. You can also @mention it to ask a question or to fact-check a message you reply to.
+An AI fact-checker for one Discord server, powered by Groq. It reads every message and replies when someone states something objectively false: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs, jokes and questions are left alone, and it never pings anyone. @mention it to ask a question, or reply to a message and mention it to fact-check that message.
 
-It checks claims with web search. For Islamic topics it draws especially on the Qur'an, hadith collections, and the works of Shi'a scholars. It presents the Shi'a scholarly position where relevant, but it never misstates a source and never posts a correction it could not verify.
-
-Built for one server per bot instance.
+On Islamic topics it draws on the Qur'an, hadith and Shi'a scholarship and presents the Shi'a position where relevant, but it never misstates a source or posts a correction it could not verify.
 
 ## How it works
 
-1. **Screening.** Messages of at least 20 characters are queued and screened in batches of up to 10 (or every 30 seconds) by a fast model (`openai/gpt-oss-20b`). The model flags messages that contain a checkable factual claim that may be wrong.
-2. **Verification.** Each flagged message is checked by a larger model (`openai/gpt-oss-120b`) using Groq's built-in browser search. It gets the few preceding messages as context.
-3. **Correction.** The bot replies only if the verifier says the statement is incorrect with confidence of at least 0.85. After a correction, that channel has a 60-second cooldown. Errors are logged, never posted in chat.
-4. **Mentions.** If you @mention the bot, it always replies, using the verification model with web search. Reply to a message and mention it to get that message fact-checked, or mention it with a question. Mentions skip the length minimum and channel cooldown but still count toward the per-user limit and the verification budget. If it can't answer (for example because the budget is used up), it says so.
+1. **Screening:** messages of 20+ characters are screened in batches (10 messages or every 30 s) by `openai/gpt-oss-20b`, which flags checkable claims that may be wrong.
+2. **Verification:** each flagged message is checked by `openai/gpt-oss-120b` with web search, using a few preceding messages as context.
+3. **Correction:** the bot replies only at 0.85+ confidence with quoted evidence, then waits 60 s before correcting in that channel again. Errors go to the logs, never to chat.
+4. **Mentions:** always answered. If web search is unavailable (budget used up or Groq down), it answers without search on the 20b model and says so, then tries OpenRouter if that also fails.
+
+Web search is used rarely, since each opened page costs thousands of tokens: only when an exact figure, quote or reference is needed, and then one search and one short page.
+
+In read-aloud channels (`corrections.noLinkChannels`, default `tts`) replies are plain text with no links, capped at `SPOKEN_MAX_CHARS` in [prompts.ts](src/factcheck/prompts.ts).
 
 ## Setup
 
-You'll need Node.js 24, a Discord bot token, and a [Groq API key](https://console.groq.com/keys).
+You need Node.js 24, a Discord bot token and a [Groq API key](https://console.groq.com/keys). An [OpenRouter key](https://openrouter.ai/keys) is optional.
 
-1. Copy `.env.example` to `.env` and fill in your tokens, application ID, and server ID.
-2. In the [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent**. Invite the bot with the `bot` and `applications.commands` scopes.
-3. Give it **View Channels**, **Send Messages**, and **Read Message History** in the channels it should watch. Add **Send Messages in Threads** if needed.
+1. Copy `.env.example` to `.env` and fill it in. Leave `OPENROUTER_API_KEY` empty to run on Groq only.
+2. In the [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent** and invite the bot with the `bot` and `applications.commands` scopes.
+3. Give it **View Channels**, **Send Messages**, **Read Message History** (and **Send Messages in Threads** if needed) where it should watch.
+4. Run:
 
-```sh
-npm ci
-npm run config:check
-```
+   ```sh
+   npm ci
+   npm run config:check
+   ```
 
-Add your Discord user ID to `ownerIds` in `config/bot.json`:
+5. Add your Discord user ID to `ownerIds` in `config/bot.json`, then:
 
-```json
-"ownerIds": ["YOUR_DISCORD_USER_ID"]
-```
+   ```sh
+   npm run commands:register
+   npm run build
+   npm start
+   ```
 
-Then register the commands and start the bot:
+## Guidelines
 
-```sh
-npm run commands:register
-npm run build
-npm start
-```
-
-## Guidelines: scope, sources and perspective
-
-The bot's fact-checking guidelines are in `config/factcheck.txt`, selected by `"promptFile"` in the JSON. The file is gitignored and created automatically with the defaults from [prompt-file.ts](src/config/prompt-file.ts). It covers:
-
-- **Scope:** what counts as objectively false, and what to leave alone.
-- **Sources:** official statistics (UN, World Bank, WHO, Pew, Our World in Data), and Qur'an and hadith references. These include Shi'a works (al-Kafi, Nahj al-Balagha, Bihar al-Anwar, …) and scholars (al-Mufid, al-Tusi, al-Majlisi, Tabataba'i, al-Khoei, Sistani, Mutahhari, …).
-- **Perspective:** a Twelver Shi'a scholarly perspective, with objectivity first.
-- **Tone:** brief and respectful.
-
-Edit the file to tune the bot. Changes apply to the next check. The reply format is fixed in code, so edits cannot break parsing.
+Scope, sources, perspective and tone live in `config/factcheck.txt` (gitignored, created with the defaults from [prompt-file.ts](src/config/prompt-file.ts)). Edits apply to the next check. The reply format is fixed in code, so edits cannot break parsing.
 
 ## Commands
 
-| Command                                         | What it does                                                |
-| ----------------------------------------------- | ----------------------------------------------------------- |
-| `/config show`, `/config set`, `/config reload` | View, change, or reload settings                            |
-| `/ignore user:@someone time:2h`                 | Stop fact-checking someone temporarily                      |
-| `/unignore user:@someone`                       | Remove an ignore                                            |
-| `/status`                                       | Show activity since start and API budget usage              |
-| `/about`, `/help`                               | Show version and author, or how the bot works               |
-| `/stop`                                         | Shut down this instance; start again through GitHub Actions |
+Only users in `ownerIds` can use them; server admins get no bypass.
 
-Only users in `ownerIds` can use commands; server admins get no bypass. Ignore durations accept `s`, `m`, `h`, or `d`, up to `365d`.
+| Command                                         | What it does                                     |
+| ----------------------------------------------- | ------------------------------------------------ |
+| `/config show`, `/config set`, `/config reload` | View, change or reload settings                  |
+| `/ignore user:@someone time:2h`                 | Stop checking someone for a while (up to `365d`) |
+| `/unignore user:@someone`                       | Remove an ignore                                 |
+| `/status`                                       | Activity since start and API budget usage        |
+| `/about`, `/help`                               | Version and author, or how the bot works         |
+| `/stop`                                         | Shut down; start again through GitHub Actions    |
 
-Settings live in `config/bot.json`; see the [example](config/bot.example.json). The main settings are:
+## Settings
 
-| Setting                                           | Default            | Meaning                                                    |
-| ------------------------------------------------- | ------------------ | ---------------------------------------------------------- |
-| `enabled`                                         | `true`             | Pause or resume fact-checking                              |
-| `channels.include` / `channels.exclude`           | `[]`               | Channel or category allow/deny lists (empty include = all) |
-| `screening.batchSize`, `screening.maxWaitSeconds` | `10`, `30`         | Batch size and maximum wait before screening               |
-| `screening.minMessageChars`                       | `20`               | Shorter messages are never checked                         |
-| `screening.userChecksPerMinute`                   | `6`                | Per-user cap so one person can't drain the budget          |
-| `corrections.minConfidence`                       | `0.85`             | Minimum verifier confidence to post                        |
-| `corrections.channelCooldownSeconds`              | `60`               | Quiet time per channel after a correction                  |
-| `corrections.noLinkChannels`                      | `["tts"]`          | Channel names whose replies omit the Citation links        |
-| `ai.screenModel`, `ai.verifyModel`                | gpt-oss-20b / 120b | Groq models for each stage                                 |
-| `ai.webSearch`                                    | `true`             | Use Groq browser search during verification                |
+Settings live in `config/bot.json` (see the [example](config/bot.example.json)); use `/config reload` after editing it by hand. The main ones:
 
-After manual edits, use `/config reload`. Secrets, local settings, and runtime data are gitignored.
+| Setting                                 | Default            | Meaning                                                     |
+| --------------------------------------- | ------------------ | ----------------------------------------------------------- |
+| `enabled`                               | `true`             | Pause or resume fact-checking                               |
+| `channels.include` / `channels.exclude` | `[]`               | Channel or category allow/deny lists (empty include = all)  |
+| `screening.userChecksPerMinute`         | `6`                | Per-user cap so one person can't drain the budget           |
+| `corrections.minConfidence`             | `0.85`             | Minimum verifier confidence to post                         |
+| `corrections.noLinkChannels`            | `["tts"]`          | Read-aloud channels: short replies, no links                |
+| `ai.screenModel`, `ai.verifyModel`      | gpt-oss-20b / 120b | Groq models for each stage                                  |
+| `ai.webSearch`                          | `true`             | Use Groq browser search                                     |
+| `ai.openRouter.enabled`                 | `true`             | Use OpenRouter as a backup (needs `OPENROUTER_API_KEY`)     |
+| `ai.openRouter.model`                   | `openrouter/free`  | OpenRouter model; the default picks any free model          |
+| `ai.openRouter.webSearchResults`        | `0`                | Search results per OpenRouter request (0–2); search is paid |
 
-Upgrading from the old chatbot: on first start the old `config/bot.json` is migrated automatically. Owners, the enabled flag, and excluded channels are kept. The old personality prompt is not reused.
+## API limits
 
-## Groq limits
+Groq's free plan limits each model separately: **30 requests/min, 1,000/day, 8,000 tokens/min and 200,000 tokens/day** ([current limits](https://console.groq.com/docs/rate-limits)). The bot tracks its own budget per stage in `rateLimits.screen` and `rateLimits.verify`. A single web search can use 60k+ tokens, which is why search is capped. When the budget is used up, passive checks are skipped and mentions fall back as described above.
 
-Groq limits each model separately. On the free plan, `openai/gpt-oss-20b` and `openai/gpt-oss-120b` each allow **30 requests/minute, 1,000/day, 8,000 tokens/minute, and 200,000/day** ([check current limits](https://console.groq.com/docs/rate-limits)). The bot keeps a separate local budget per stage in `rateLimits.screen` and `rateLimits.verify`, and respects provider cooldowns.
-
-Batching means one screening request covers up to 10 messages. Verification is the expensive step: web search results add input tokens, so `ai.searchTokenAllowance` (3,000) is reserved up front and then settled with Groq's reported usage. Expect roughly one verification per minute on the free plan. When a budget runs out, messages are skipped, not queued.
+OpenRouter is only a backup. Free models allow about 20 requests/min and 50/day (1,000/day after buying $10 of credits), and the model behind `openrouter/free` varies. Screening batches never use it, so its quota is left for mentions. OpenRouter web search is billed even on free models, so it is off by default.
 
 ## Hosting
 
-On an Oracle Cloud VM or another Linux host with Docker, create `.env`, copy `config/bot.example.json` to `config/bot.json`, fill in `ownerIds`, then run:
+On a Linux host with Docker, create `.env`, copy `config/bot.example.json` to `config/bot.json` and fill in `ownerIds`, then:
 
 ```sh
 sudo chown -R 1000:1000 config
@@ -102,8 +90,10 @@ docker compose run --rm bot node dist/register-commands.js
 docker compose up -d
 ```
 
-No inbound ports are needed. Settings stay in `config/`; ignore timers and API budgets persist in a Docker volume. Run one instance at a time. A [systemd service](deploy/hilol.service) is also included; see [deploy/README.md](deploy/README.md) for automatic deployment.
+No inbound ports are needed. Run one instance at a time. For the Oracle VM with automatic deploys from GitHub, see [deploy/README.md](deploy/README.md); add `OPENROUTER_API_KEY` to the server's `/opt/hilol/.env` by hand if you want the backup.
 
-Message text and a few preceding messages are sent to Groq for checking. Nothing is stored except ignores and API budget counters.
+Message text and a few preceding messages are sent to Groq (and to OpenRouter when it is used). Only ignores and API budget counters are stored.
 
-For development, use `npm run dev`. Run `npm run check` to check types, tests, formatting, and the build.
+## Development
+
+`npm run dev` runs with auto-reload and readable logs. `npm run check` runs types, tests, formatting and the build.

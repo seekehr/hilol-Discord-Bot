@@ -77,7 +77,8 @@ describe('prompts and parsing', () => {
     );
     expect(system!.content).toContain('Use Shi’a sources.');
     expect(system!.content).toContain('search the web');
-    expect(system!.content).toContain('at most ONE search and open at most TWO pages');
+    expect(system!.content).toContain('run ONE search and open ONE page');
+    expect(system!.content).toContain('Do NOT search by default');
     const [mention] = mentionPrompt(
       '',
       'Bot',
@@ -87,7 +88,7 @@ describe('prompts and parsing', () => {
       100,
       true,
     );
-    expect(mention!.content).toContain('at most ONE search and open at most TWO pages');
+    expect(mention!.content).toContain('run ONE search and open ONE page');
   });
 
   it('makes read-aloud (no-link) channels answer in one short sentence', () => {
