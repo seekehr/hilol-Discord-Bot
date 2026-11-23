@@ -61,6 +61,16 @@ export const configSchema = z
       searchTokenAllowance: integer(0, 100_000),
       timeoutMs: integer(1_000, 180_000),
       maxRetries: integer(0, 3),
+      // Backup provider used when Groq fails. Needs OPENROUTER_API_KEY in the environment.
+      openRouter: z
+        .strictObject({
+          enabled: z.boolean(),
+          // "openrouter/free" picks any available free model.
+          model: z.string().trim().min(1).max(150),
+          // Results per search. 0 = no search: OpenRouter bills search even on free models.
+          webSearchResults: integer(0, 2),
+        })
+        .default({ enabled: true, model: 'openrouter/free', webSearchResults: 0 }),
     }),
     // Groq limits are per model, so each stage has its own local budget.
     rateLimits: z.strictObject({ screen: budgetSchema, verify: budgetSchema }),
@@ -114,6 +124,7 @@ export const defaultConfig: BotConfig = {
     searchTokenAllowance: 3_000,
     timeoutMs: 60_000,
     maxRetries: 1,
+    openRouter: { enabled: true, model: 'openrouter/free', webSearchResults: 0 },
   },
   rateLimits: { screen: { ...freeTierBudget }, verify: { ...freeTierBudget } },
 };

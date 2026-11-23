@@ -4,6 +4,8 @@ import { loadEnv } from './config/env.js';
 import { ConfigStore } from './config/store.js';
 import { StateStore } from './storage/state-store.js';
 import { GroqProvider } from './ai/groq.js';
+import { OpenRouterProvider } from './ai/openrouter.js';
+import { FallbackCompleter } from './ai/fallback.js';
 import { FactCheckService } from './factcheck/service.js';
 import { InteractionService } from './discord/interactions.js';
 import { errorKind, errorDetails } from './core/errors.js';
@@ -29,13 +31,11 @@ async function main(): Promise<void> {
     makeCache: Options.cacheWithLimits({ ...Options.DefaultMakeCacheSettings, MessageManager: 50 }),
     sweepers: { messages: { interval: 300, lifetime: 3_600 } },
   });
-  const factCheck = new FactCheckService(
-    env.DISCORD_GUILD_ID,
-    config,
-    state,
-    new GroqProvider(env.GROQ_API_KEY, state),
-    logger,
-  );
+  const groq = new GroqProvider(env.GROQ_API_KEY, state);
+  const ai = env.OPENROUTER_API_KEY
+    ? new FallbackCompleter(groq, new OpenRouterProvider(env.OPENROUTER_API_KEY), logger)
+    : groq;
+  const factCheck = new FactCheckService(env.DISCORD_GUILD_ID, config, state, ai, logger);
   let stopping = false;
   const stop = () => {
     if (stopping) return;

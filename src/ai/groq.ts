@@ -14,6 +14,8 @@ export interface CompletionRequest {
   // Groq's server-side web search. Search results add input tokens, so reserve extra.
   webSearch?: { extraTokens: number };
   json?: boolean;
+  // false keeps this request off the backup provider (whose free quota is small).
+  fallback?: boolean;
 }
 
 export interface Completer {

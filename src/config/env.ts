@@ -9,6 +9,11 @@ const envSchema = z.object({
   DISCORD_CLIENT_ID: snowflake,
   DISCORD_GUILD_ID: snowflake,
   GROQ_API_KEY: z.string().min(20),
+  // Optional backup provider. An empty value in .env means "not set".
+  OPENROUTER_API_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().min(20).optional(),
+  ),
   CONFIG_PATH: z.string().default('./config/bot.json'),
   STATE_PATH: z.string().default('./data/state.json'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),

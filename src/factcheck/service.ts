@@ -21,7 +21,8 @@ import {
   type ChatLine,
 } from './prompts.js';
 
-export const NO_SEARCH_NOTE = '-# Web search budget used up, so this answer is unsearched.\n';
+export const NO_SEARCH_NOTE =
+  '-# Web search is unavailable right now, so this answer is unsearched.\n';
 
 const toLine = (message: Message): ChatLine => ({
   author: message.member?.displayName ?? message.author.displayName,
@@ -136,6 +137,8 @@ export class FactCheckService {
           messages: screeningPrompt(batch.map(toLine), config.screening.maxMessageChars),
           maxOutputTokens: config.ai.screenMaxOutputTokens,
           json: true,
+          // Batches run all day; on OpenRouter's 50 free requests they would starve mentions.
+          fallback: false,
         },
         config,
         signal,
@@ -276,15 +279,16 @@ export class FactCheckService {
       try {
         text = withCitations(await ask(config.ai.webSearch), [], links);
       } catch (error) {
-        // Out of search budget: answer without search on the cheaper model rather than
-        // refusing. Links are dropped because without search they would come from memory.
-        if (!(error instanceof RateLimitError) || !config.ai.webSearch) throw error;
-        this.logger.info(errorDetails(error), 'Search budget exhausted; answering without search');
+        // Search failed (usually budget): answer without search on the cheaper model, then
+        // OpenRouter, rather than refusing. Links are dropped because without search they
+        // would come from memory.
+        if (signal.aborted || !config.ai.webSearch) throw error;
+        this.logger.info(errorDetails(error), 'Search unavailable; answering without search');
         try {
           text = withCitations(await ask(false), [], false, NO_SEARCH_NOTE);
-        } catch (fallbackError) {
-          // Report the original wait: the search budget is what the user is waiting for.
-          throw fallbackError instanceof RateLimitError ? error : fallbackError;
+        } catch {
+          // Report the original error: the search budget is what the user is waiting for.
+          throw error;
         }
         this.stats.fallbacks++;
       }

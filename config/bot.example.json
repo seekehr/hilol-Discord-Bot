@@ -30,7 +30,12 @@
     "verifyMaxOutputTokens": 1500,
     "searchTokenAllowance": 3000,
     "timeoutMs": 60000,
-    "maxRetries": 1
+    "maxRetries": 1,
+    "openRouter": {
+      "enabled": true,
+      "model": "openrouter/free",
+      "webSearchResults": 0
+    }
   },
   "rateLimits": {
     "screen": {
