@@ -88,7 +88,42 @@ docker compose run --rm bot node dist/register-commands.js
 docker compose up -d
 ```
 
-No inbound ports are needed. Run one instance at a time. For the Oracle VM with automatic deploys from GitHub, see [deploy/README.md](deploy/README.md); add `OPENROUTER_API_KEY` to the server's `/opt/hilol/.env` by hand if you want the backup.
+No inbound ports are needed. Run one instance at a time.
+
+### Oracle Cloud (GitHub auto-deploy)
+
+The included [deployment workflow](.github/workflows/deploy.yml) deploys every push to `main` to an **Ubuntu 24.04 x86_64** Oracle VM using **Node.js 24 + systemd** (not Docker). For the full details, see [deploy/README.md](deploy/README.md).
+
+1. **Prepare the VM:** install Node.js 24 at `/usr/bin/node`; create a `hilol` user and writable `/opt/hilol/config` and `/opt/hilol/data` directories. Create `/opt/hilol/.env` from [`.env.example`](.env.example) with the Discord/Groq credentials and `LOG_LEVEL=info`. Keep this file off GitHub.
+2. **Bootstrap once:** build the project with `npm ci && npm run check`, then `npm ci --omit=dev`. Copy `dist/`, `node_modules/`, `package.json`, and `package-lock.json` to `/opt/hilol/`; copy `config/bot.example.json` to `/opt/hilol/config/bot.json` and set `ownerIds`. Give the `hilol` user ownership of these runtime files. Install [`deploy/hilol.service`](deploy/hilol.service) as `/etc/systemd/system/hilol.service`, then run:
+
+   ```sh
+   sudo systemctl daemon-reload
+   sudo systemctl enable hilol
+   cd /opt/hilol
+   sudo -u hilol /usr/bin/node dist/register-commands.js
+   sudo systemctl start hilol
+   sudo systemctl status hilol --no-pager
+   ```
+
+3. **Authorize GitHub:** create a dedicated passphrase-free Ed25519 SSH key, add its **public** key to the Oracle `ubuntu` user's `~/.ssh/authorized_keys`, and set these repository [Actions secrets](../../settings/secrets/actions):
+
+   | Secret | Value |
+   | --- | --- |
+   | `SSH_HOST` | Oracle public IP or hostname |
+   | `SSH_USER` | `ubuntu` |
+   | `SSH_PRIVATE_KEY` | Complete **private** deployment key, including header/footer |
+   | `SSH_KNOWN_HOSTS` | Verified server SSH host-key entry (not the fingerprint alone) |
+
+   Obtain the host-key entry from the trusted Oracle console, replacing `YOUR_IP` with `SSH_HOST`:
+
+   ```sh
+   awk '{print "YOUR_IP " $1 " " $2}' /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+
+4. **Deploy:** push to `main` or run [Deploy to Oracle](../../actions/workflows/deploy.yml) manually. The workflow tests, uploads, backs up and restarts the service, then checks Discord readiness. Use [Control Oracle bot](../../actions/workflows/control.yml) to start/stop/restart/check status.
+
+Check logs with `sudo journalctl -u hilol -f`, then test `/status` and `/about` in Discord. Keep `/opt/hilol/.env`, `config/`, and `data/` on the VM; auto-deploy doesn't overwrite them. Add `OPENROUTER_API_KEY` to the VM's `.env` manually if needed. GitHub's SSH user must be able to use passwordless `sudo` for deployment.
 
 Only messages that mention the bot, the message they reply to and a few preceding messages are sent to Groq (and to OpenRouter when it is used). Only ignores and API budget counters are stored.
 
