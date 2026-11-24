@@ -15,11 +15,9 @@ const packageInfo = createRequire(import.meta.url)('../../package.json') as {
   author: string;
 };
 
-const help = `I read messages in this server and reply only when someone states something objectively incorrect: wrong statistics, dates or history, scientific errors, or misquoted religious texts and scholars. Opinions, beliefs and jokes are left alone. I never ping anyone.
+const help = `Mention me to ask a question, or reply to a message and mention me to have it fact-checked. I only read messages that mention me, and I never ping anyone.
 
-Mention me to ask a question, or reply to a message and mention me to have it fact-checked.
-
-Messages are screened in small batches, and flagged claims are checked with web search before I post anything. Guidelines (scope, sources, perspective, tone) are in the promptFile text file in the config directory.
+I answer with web search when it's needed. If search is unavailable, I answer from my own knowledge and say so. Guidelines (scope, sources, perspective, tone) are in the promptFile text file in the config directory.
 
 Bot owners: /config show|set|reload, /ignore user time, /unignore user, /status, /about, /stop, /help.
 Examples: \`/config set path:enabled value:false\`, \`/config set path:channels.exclude value:["123…"]\`, \`/ignore @user 2h\`.
@@ -81,7 +79,6 @@ export class InteractionService {
           const user = interaction.options.getUser('user', true);
           const until = Date.now() + parseDuration(interaction.options.getString('time', true));
           await this.state.ignore(user.id, until);
-          this.factCheck.userIgnored(user.id);
           await interaction.editReply({
             content: `Ignoring <@${user.id}> until <t:${Math.floor(until / 1_000)}:F>.`,
             allowedMentions: { parse: [] },
@@ -95,7 +92,7 @@ export class InteractionService {
         case 'status': {
           const config = this.config.current;
           const { stats } = this.factCheck;
-          const budget = (pool: 'screen' | 'verify') => {
+          const budget = (pool: 'model' | 'fallbackModel') => {
             const usage = this.state.usage(pool);
             const limits = config.rateLimits[pool];
             const blocked =
@@ -105,7 +102,7 @@ export class InteractionService {
             return `${usage.requests}/${limits.requestsPerDay} requests, ${usage.reservedTokens}/${limits.tokensPerDay} tokens${blocked}`;
           };
           await interaction.editReply({
-            content: `Fact-checking: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.screened} messages screened, ${stats.flagged} flagged, ${stats.verified} verified, ${stats.corrections} corrections posted, ${stats.unsupported} dropped for lacking evidence, ${stats.mentions} mentions answered (${stats.fallbacks} without search), ${stats.dropped} dropped from a full queue\nQueued: ${this.factCheck.queued}\nScreening budget (24h, ${config.ai.screenModel}): ${budget('screen')}\nVerification budget (24h, ${config.ai.verifyModel}): ${budget('verify')}\nActive ignores: ${this.state.activeIgnores()}`,
+            content: `Replies: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.answered} mentions answered (${stats.unsearched} without search), ${stats.failed} failed\nMain model budget (24h, ${config.ai.model}): ${budget('model')}\nFallback model budget (24h, ${config.ai.fallbackModel}): ${budget('fallbackModel')}\nActive ignores: ${this.state.activeIgnores()}`,
             allowedMentions: { parse: [] },
           });
           return;

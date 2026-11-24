@@ -1,7 +1,7 @@
 import type { Logger } from 'pino';
 import type { BotConfig } from '../config/schema.js';
 import { errorDetails } from '../core/errors.js';
-import type { CompletionRequest, Completer } from './groq.js';
+import type { Completion, CompletionRequest, Completer } from './groq.js';
 import { OpenRouterProvider } from './openrouter.js';
 
 /**
@@ -10,7 +10,7 @@ import { OpenRouterProvider } from './openrouter.js';
  *
  * A request that wants web search only falls back when OpenRouter search is enabled:
  * otherwise the backup model would answer a "search first" prompt from memory. The
- * caller decides what to do instead (mentions retry without search).
+ * caller decides what to do instead (checks and mentions retry without search).
  */
 export class FallbackCompleter implements Completer {
   constructor(
@@ -23,13 +23,12 @@ export class FallbackCompleter implements Completer {
     request: CompletionRequest,
     config: BotConfig,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<Completion> {
     try {
       return await this.primary.complete(request, config, signal);
     } catch (error) {
       if (
         signal?.aborted ||
-        request.fallback === false ||
         !config.ai.openRouter.enabled ||
         (request.webSearch && !OpenRouterProvider.searches(config))
       )

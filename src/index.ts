@@ -71,7 +71,7 @@ async function main(): Promise<void> {
       return;
     }
     // Deployment waits for this exact log message.
-    logger.info({ bot: ready.user.tag, screenModel: config.current.ai.screenModel }, 'Bot ready');
+    logger.info({ bot: ready.user.tag, model: config.current.ai.model }, 'Bot ready');
   });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);

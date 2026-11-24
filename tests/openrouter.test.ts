@@ -2,19 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { OpenRouterProvider } from '../src/ai/openrouter.js';
 import { FallbackCompleter } from '../src/ai/fallback.js';
-import type { CompletionRequest, Completer } from '../src/ai/groq.js';
+import type { Completion, CompletionRequest, Completer } from '../src/ai/groq.js';
 import { defaultConfig, type BotConfig } from '../src/config/schema.js';
 import { RateLimitError } from '../src/core/rate-limit-error.js';
 
 const mention: CompletionRequest = {
-  pool: 'verify',
+  pool: 'model',
   model: 'openai/gpt-oss-120b',
   messages: [{ role: 'user', content: 'When was Karbala?' }],
   maxOutputTokens: 1_500,
   webSearch: { extraTokens: 3_000 },
 };
 const { webSearch: _search, ...rest } = mention;
-const plain: CompletionRequest = { ...rest, pool: 'screen' };
+const plain: CompletionRequest = { ...rest, pool: 'fallbackModel' };
 const reply = (content: string) => Response.json({ choices: [{ message: { content } }] });
 const body = (request: ReturnType<typeof vi.fn<typeof fetch>>) =>
   JSON.parse(String(request.mock.calls[0]![1]?.body)) as Record<string, unknown>;
@@ -30,7 +30,11 @@ describe('OpenRouter transport', () => {
   it('sends the same prompt to the free router without web search by default', async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(reply(' 680 CE. '));
     const provider = new OpenRouterProvider('test-secret', request);
-    expect(await provider.complete(mention, defaultConfig)).toBe('680 CE.');
+    expect(await provider.complete(mention, defaultConfig)).toEqual({
+      text: '680 CE.',
+      provider: 'openrouter',
+      model: 'openrouter/free',
+    });
     expect(request.mock.calls[0]![0]).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(body(request)).toMatchObject({
       model: 'openrouter/free',
@@ -38,6 +42,24 @@ describe('OpenRouter transport', () => {
       max_tokens: 1_500,
     });
     expect(body(request)).not.toHaveProperty('plugins');
+  });
+
+  it('reports the model the free router picked and the tokens it used', async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        model: 'meta-llama/llama-3.3-70b-instruct:free',
+        choices: [{ message: { content: 'ok' } }],
+        usage: { total_tokens: 812 },
+      }),
+    );
+    expect(
+      await new OpenRouterProvider('test-secret', request).complete(mention, defaultConfig),
+    ).toEqual({
+      text: 'ok',
+      provider: 'openrouter',
+      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      tokens: 812,
+    });
   });
 
   it('caps web search at the configured number of results', async () => {
@@ -72,20 +94,26 @@ describe('OpenRouter transport', () => {
   });
 });
 
+const fromOpenRouter: Completion = {
+  text: 'from OpenRouter',
+  provider: 'openrouter',
+  model: 'meta-llama/llama-3.3-70b-instruct:free',
+};
+
 describe('Groq to OpenRouter fallback', () => {
   const setup = (groq: Completer['complete']) => {
     const primary = { complete: vi.fn(groq) };
-    const backup = { complete: vi.fn<Completer['complete']>(async () => 'from OpenRouter') };
+    const backup = { complete: vi.fn<Completer['complete']>(async () => fromOpenRouter) };
     const ai = new FallbackCompleter(primary, backup, pino({ level: 'silent' }));
     return { ai, backup };
   };
-  const outOfBudget = async (): Promise<string> => {
+  const outOfBudget = async (): Promise<Completion> => {
     throw new RateLimitError('day', 8_804, 'tokens');
   };
 
   it('uses OpenRouter when Groq fails a request without search', async () => {
     const { ai, backup } = setup(outOfBudget);
-    expect(await ai.complete(plain, defaultConfig)).toBe('from OpenRouter');
+    expect(await ai.complete(plain, defaultConfig)).toBe(fromOpenRouter);
     expect(backup.complete.mock.calls[0]![0]).toBe(plain);
   });
 
@@ -93,15 +121,11 @@ describe('Groq to OpenRouter fallback', () => {
     const { ai, backup } = setup(outOfBudget);
     await expect(ai.complete(mention, defaultConfig)).rejects.toBeInstanceOf(RateLimitError);
     expect(backup.complete).not.toHaveBeenCalled();
-    expect(await ai.complete(mention, withSearch(1))).toBe('from OpenRouter');
+    expect(await ai.complete(mention, withSearch(1))).toBe(fromOpenRouter);
   });
 
-  it('keeps opted-out requests on Groq and reports Groq’s error if both fail', async () => {
+  it('reports Groq’s error if both providers fail', async () => {
     const { ai, backup } = setup(outOfBudget);
-    await expect(ai.complete({ ...plain, fallback: false }, defaultConfig)).rejects.toBeInstanceOf(
-      RateLimitError,
-    );
-    expect(backup.complete).not.toHaveBeenCalled();
     backup.complete.mockRejectedValue(new Error('down'));
     await expect(ai.complete(plain, defaultConfig)).rejects.toMatchObject({
       retryAfterSeconds: 8_804,

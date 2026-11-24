@@ -1,7 +1,12 @@
 import type { BotConfig } from '../config/schema.js';
 import { ProviderError, UserError } from '../core/errors.js';
 import { RateLimitError } from '../core/rate-limit-error.js';
-import { retryAfterMilliseconds, type CompletionRequest, type Completer } from './groq.js';
+import {
+  retryAfterMilliseconds,
+  type Completion,
+  type CompletionRequest,
+  type Completer,
+} from './groq.js';
 
 const endpoint = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -38,7 +43,7 @@ export class OpenRouterProvider implements Completer {
     { messages, maxOutputTokens, webSearch, json }: CompletionRequest,
     config: BotConfig,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<Completion> {
     signal?.throwIfAborted();
     const { model, webSearchResults } = config.ai.openRouter;
     if (this.blockedUntil > this.now())
@@ -94,10 +99,20 @@ export class OpenRouterProvider implements Completer {
         'OpenRouter failed to produce a reply.',
         typeof error.message === 'string' ? error.message.slice(0, 500) : undefined,
       );
-    const content = (data as { choices?: { message?: { content?: unknown } }[] } | null)
-      ?.choices?.[0]?.message?.content;
+    const reply = data as {
+      model?: unknown;
+      choices?: { message?: { content?: unknown } }[];
+      usage?: { total_tokens?: unknown };
+    } | null;
+    const content = reply?.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || !content.trim())
       throw new UserError('OpenRouter returned an empty reply.');
-    return content.trim();
+    const tokens = reply?.usage?.total_tokens;
+    return {
+      text: content.trim(),
+      provider: 'openrouter',
+      model: typeof reply?.model === 'string' ? reply.model : model,
+      ...(typeof tokens === 'number' ? { tokens } : {}),
+    };
   }
 }

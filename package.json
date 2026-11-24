@@ -2,7 +2,7 @@
   "name": "factcheckerbot",
   "version": "2.0.0",
   "private": true,
-  "description": "An AI-powered Discord bot that corrects objectively incorrect statements, drawing on statistics and Islamic sources with a Shi'a scholarly perspective",
+  "description": "An AI-powered Discord bot that answers questions and fact-checks messages when mentioned, drawing on statistics and Islamic sources with a Shi'a scholarly perspective",
   "author": "Seekehr",
   "type": "module",
   "engines": {

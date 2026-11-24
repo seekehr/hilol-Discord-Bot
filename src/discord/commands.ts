@@ -15,10 +15,7 @@ export const commands = [
         .setName('set')
         .setDescription('Set any configuration field')
         .addStringOption((o) =>
-          o
-            .setName('path')
-            .setDescription('For example: enabled or corrections.minConfidence')
-            .setRequired(true),
+          o.setName('path').setDescription('For example: enabled or ai.model').setRequired(true),
         )
         .addStringOption((o) =>
           o
@@ -31,15 +28,15 @@ export const commands = [
     .addSubcommand((c) =>
       c.setName('reload').setDescription('Validate and reload the config files from disk'),
     ),
-  ownerCommand('ignore', 'Temporarily stop fact-checking someone’s messages')
+  ownerCommand('ignore', 'Temporarily stop answering someone’s mentions')
     .addUserOption((o) => o.setName('user').setDescription('User to ignore').setRequired(true))
     .addStringOption((o) =>
       o.setName('time').setDescription('Examples: 10m, 2h, 7d; maximum 365d').setRequired(true),
     ),
-  ownerCommand('unignore', 'Resume fact-checking a user').addUserOption((o) =>
+  ownerCommand('unignore', 'Resume answering a user').addUserOption((o) =>
     o.setName('user').setDescription('User to unignore').setRequired(true),
   ),
-  ownerCommand('status', 'Show fact-checking activity and local API budget usage'),
+  ownerCommand('status', 'Show reply activity and local API budget usage'),
   ownerCommand('about', 'Show the bot version, author, and Node.js runtime'),
   ownerCommand('stop', 'Shut down this bot instance; start Oracle again through GitHub Actions'),
   ownerCommand('help', 'Show how the bot works and its commands'),

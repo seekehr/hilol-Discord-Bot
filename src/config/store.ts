@@ -26,6 +26,49 @@ function migrateChatbotConfig(value: unknown): unknown {
   };
 }
 
+type Legacy = Record<string, Record<string, unknown> | undefined>;
+
+// Configs from the automatic-scanning version: drop the screening and correction settings
+// and rename what mentions still use. Unknown or invalid values are left for validation.
+function migrateScanningConfig(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || !('screening' in value || 'corrections' in value))
+    return value;
+  const old = value as Legacy & Record<string, unknown>;
+  const { screening = {}, corrections = {}, ai = {}, rateLimits = {} } = old;
+  const defaults = structuredClone(defaultConfig);
+  const pick = <T>(fallback: T, ...candidates: unknown[]) =>
+    (candidates.find((c) => c !== undefined) as T | undefined) ?? fallback;
+  return {
+    ownerIds: old.ownerIds ?? defaults.ownerIds,
+    enabled: old.enabled ?? defaults.enabled,
+    promptFile: old.promptFile ?? defaults.promptFile,
+    channels: old.channels ?? defaults.channels,
+    replies: {
+      maxMessageChars: pick(defaults.replies.maxMessageChars, screening.maxMessageChars),
+      userRequestsPerMinute: pick(
+        defaults.replies.userRequestsPerMinute,
+        screening.userChecksPerMinute,
+      ),
+      contextMessages: pick(defaults.replies.contextMessages, corrections.contextMessages),
+      noLinkChannels: pick(defaults.replies.noLinkChannels, corrections.noLinkChannels),
+    },
+    ai: {
+      model: pick(defaults.ai.model, ai.verifyModel, ai.model),
+      fallbackModel: pick(defaults.ai.fallbackModel, ai.screenModel, ai.fallbackModel),
+      webSearch: pick(defaults.ai.webSearch, ai.webSearch),
+      maxOutputTokens: pick(defaults.ai.maxOutputTokens, ai.verifyMaxOutputTokens),
+      searchTokenAllowance: pick(defaults.ai.searchTokenAllowance, ai.searchTokenAllowance),
+      timeoutMs: pick(defaults.ai.timeoutMs, ai.timeoutMs),
+      maxRetries: pick(defaults.ai.maxRetries, ai.maxRetries),
+      openRouter: pick(defaults.ai.openRouter, ai.openRouter),
+    },
+    rateLimits: {
+      model: pick(defaults.rateLimits.model, rateLimits.verify),
+      fallbackModel: pick(defaults.rateLimits.fallbackModel, rateLimits.screen),
+    },
+  };
+}
+
 export class ConfigStore {
   revision = 0;
   private value: BotConfig = structuredClone(defaultConfig);
@@ -58,7 +101,7 @@ export class ConfigStore {
   async load(): Promise<void> {
     await this.queue.run(async () => {
       const disk = await readJson(this.path);
-      const migrated = migrateChatbotConfig(disk ?? defaultConfig);
+      const migrated = migrateScanningConfig(migrateChatbotConfig(disk ?? defaultConfig));
       const next = this.validate(migrated);
       await ensurePrompt(this.promptPath(next));
       if (disk === undefined || JSON.stringify(next) !== JSON.stringify(disk))
@@ -89,7 +132,7 @@ export class ConfigStore {
           ['constructor', 'prototype', '__proto__'].includes(key),
       )
     ) {
-      throw new UserError('Invalid setting path. Use a known path such as ai.verifyModel.');
+      throw new UserError('Invalid setting path. Use a known path such as ai.model.');
     }
     await this.update((draft) => {
       let target = draft as unknown as Record<string, unknown>;

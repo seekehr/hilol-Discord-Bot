@@ -23,13 +23,13 @@ describe('configuration', () => {
     expect(store.current).toEqual(defaultConfig);
     expect(await store.readPrompt()).toBe(defaultGuidelines);
     await Promise.all([
-      store.set('ai.verifyModel', 'test-model'),
-      store.set('corrections.minConfidence', 0.9),
+      store.set('ai.model', 'test-model'),
+      store.set('replies.contextMessages', 2),
     ]);
     const restored = new ConfigStore(path);
     await restored.load();
-    expect(restored.current.ai.verifyModel).toBe('test-model');
-    expect(restored.current.corrections.minConfidence).toBe(0.9);
+    expect(restored.current.ai.model).toBe('test-model');
+    expect(restored.current.replies.contextMessages).toBe(2);
   });
 
   it('regenerates the default guidelines file exactly when it is deleted', async () => {
@@ -57,12 +57,8 @@ describe('configuration', () => {
     const store = new ConfigStore(path);
     await store.load();
     const before = await readFile(path, 'utf8');
-    await expect(store.set('screening.minMessageChars', 2_000)).rejects.toThrow(
-      'Invalid configuration',
-    );
-    await expect(store.set('corrections.minConfidence', 2)).rejects.toThrow(
-      'Invalid configuration',
-    );
+    await expect(store.set('replies.maxMessageChars', 50)).rejects.toThrow('Invalid configuration');
+    await expect(store.set('ai.maxRetries', 9)).rejects.toThrow('Invalid configuration');
     await expect(store.set('promptFile', '../private.txt')).rejects.toThrow(
       'Invalid configuration',
     );
@@ -89,6 +85,80 @@ describe('configuration', () => {
     await store.load();
     store.current.channels.exclude.push(channel);
     expect(store.current.channels.exclude).toEqual([]);
+  });
+
+  it('migrates a scanning-era config, keeping what mentions use and dropping the rest', async () => {
+    const path = await temporaryPath('bot.json');
+    const budget = (tokensPerDay: number) => ({
+      requestsPerMinute: 30,
+      requestsPerDay: 1_000,
+      tokensPerMinute: 8_000,
+      tokensPerDay,
+    });
+    await writeFile(
+      path,
+      JSON.stringify({
+        ownerIds: [owner],
+        enabled: true,
+        promptFile: 'factcheck.txt',
+        channels: { include: [], exclude: [channel] },
+        screening: {
+          batchSize: 10,
+          maxWaitSeconds: 30,
+          minMessageChars: 20,
+          maxMessageChars: 1_200,
+          maxQueuedMessages: 100,
+          maxMessageAgeSeconds: 600,
+          userChecksPerMinute: 3,
+        },
+        corrections: {
+          minConfidence: 0.85,
+          unsearchedMinConfidence: 0.9,
+          channelCooldownSeconds: 60,
+          maxPerBatch: 2,
+          contextMessages: 2,
+          noLinkChannels: ['tts', 'voice'],
+        },
+        ai: {
+          screenModel: 'small-model',
+          verifyModel: 'big-model',
+          webSearch: false,
+          screenMaxOutputTokens: 400,
+          verifyMaxOutputTokens: 1_000,
+          searchTokenAllowance: 2_000,
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          openRouter: { enabled: false, model: 'openrouter/free', webSearchResults: 0 },
+        },
+        rateLimits: { screen: budget(100_000), verify: budget(150_000) },
+      }),
+    );
+    const store = new ConfigStore(path);
+    await store.load();
+    expect(store.current).toEqual({
+      ownerIds: [owner],
+      enabled: true,
+      promptFile: 'factcheck.txt',
+      channels: { include: [], exclude: [channel] },
+      replies: {
+        maxMessageChars: 1_200,
+        userRequestsPerMinute: 3,
+        contextMessages: 2,
+        noLinkChannels: ['tts', 'voice'],
+      },
+      ai: {
+        model: 'big-model',
+        fallbackModel: 'small-model',
+        webSearch: false,
+        maxOutputTokens: 1_000,
+        searchTokenAllowance: 2_000,
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        openRouter: { enabled: false, model: 'openrouter/free', webSearchResults: 0 },
+      },
+      rateLimits: { model: budget(150_000), fallbackModel: budget(100_000) },
+    });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(store.current);
   });
 
   it('migrates a chatbot config, keeping owners and exclusions but not its personality', async () => {

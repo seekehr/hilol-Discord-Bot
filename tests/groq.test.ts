@@ -5,16 +5,16 @@ import { defaultConfig } from '../src/config/schema.js';
 import { errorDetails, publicError } from '../src/core/errors.js';
 import { temporaryPath } from './helpers.js';
 
-const screen: CompletionRequest = {
-  pool: 'screen',
+const plain: CompletionRequest = {
+  pool: 'fallbackModel',
   model: 'openai/gpt-oss-20b',
   messages: [{ role: 'user', content: 'Hello' }],
   maxOutputTokens: 400,
   json: true,
 };
-const verify: CompletionRequest = {
-  ...screen,
-  pool: 'verify',
+const searching: CompletionRequest = {
+  ...plain,
+  pool: 'model',
   model: 'openai/gpt-oss-120b',
   webSearch: { extraTokens: 3_000 },
 };
@@ -27,7 +27,7 @@ const body = (request: ReturnType<typeof vi.fn<typeof fetch>>, call = 0) =>
   JSON.parse(String(request.mock.calls[call]![1]?.body)) as Record<string, unknown>;
 
 describe('Groq transport', () => {
-  it('sends JSON mode for screening and records usage against the screening budget', async () => {
+  it('sends JSON mode and records usage against that model’s budget', async () => {
     const state = await stateStore();
     const request = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({
@@ -36,7 +36,12 @@ describe('Groq transport', () => {
       }),
     );
     const provider = new GroqProvider('test-secret', state, request);
-    expect(await provider.complete(screen, defaultConfig)).toBe('{"check":[]}');
+    expect(await provider.complete(plain, defaultConfig)).toEqual({
+      text: '{"check":[]}',
+      provider: 'groq',
+      model: 'openai/gpt-oss-20b',
+      tokens: 400,
+    });
     expect(request.mock.calls[0]![0]).toBe('https://api.groq.com/openai/v1/chat/completions');
     expect(body(request)).toMatchObject({
       model: 'openai/gpt-oss-20b',
@@ -45,8 +50,8 @@ describe('Groq transport', () => {
       response_format: { type: 'json_object' },
     });
     expect(body(request)).not.toHaveProperty('tools');
-    expect(state.usage('screen')).toMatchObject({ requests: 1, reservedTokens: 400 });
-    expect(state.usage('verify').requests).toBe(0);
+    expect(state.usage('fallbackModel')).toMatchObject({ requests: 1, reservedTokens: 400 });
+    expect(state.usage('model').requests).toBe(0);
   });
 
   it('enables browser search without JSON mode and reserves the search allowance', async () => {
@@ -54,13 +59,13 @@ describe('Groq transport', () => {
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' } }] }));
-    await new GroqProvider('test-secret', state, request).complete(verify, defaultConfig);
+    await new GroqProvider('test-secret', state, request).complete(searching, defaultConfig);
     expect(body(request)).toMatchObject({
       tools: [{ type: 'browser_search' }],
       parallel_tool_calls: false,
     });
     expect(body(request)).not.toHaveProperty('response_format');
-    expect(state.usage('verify').reservedTokens).toBeGreaterThan(3_400);
+    expect(state.usage('model').reservedTokens).toBeGreaterThan(3_400);
   });
 
   it('honors 429 Retry-After per model and blocks later requests locally', async () => {
@@ -71,9 +76,9 @@ describe('Groq transport', () => {
         new Response('sensitive body', { status: 429, headers: { 'retry-after': '120' } }),
       );
     const provider = new GroqProvider('test-secret', state, request);
-    await expect(provider.complete(verify, defaultConfig)).rejects.toThrow('rate limit');
-    expect(state.usage('verify').blockedUntil).toBeGreaterThan(Date.now() + 119_000);
-    await expect(provider.complete(verify, defaultConfig)).rejects.toThrow('cooling down');
+    await expect(provider.complete(searching, defaultConfig)).rejects.toThrow('rate limit');
+    expect(state.usage('model').blockedUntil).toBeGreaterThan(Date.now() + 119_000);
+    await expect(provider.complete(searching, defaultConfig)).rejects.toThrow('cooling down');
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -84,8 +89,8 @@ describe('Groq transport', () => {
       .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
       .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: 'Recovered' } }] }));
     const provider = new GroqProvider('test-secret', state, request);
-    expect(await provider.complete(screen, defaultConfig)).toBe('Recovered');
-    expect(state.usage('screen').requests).toBe(2);
+    expect((await provider.complete(plain, defaultConfig)).text).toBe('Recovered');
+    expect(state.usage('fallbackModel').requests).toBe(2);
   });
 
   it('does not leak provider errors and rejects empty or malformed replies', async () => {
@@ -98,10 +103,10 @@ describe('Groq transport', () => {
       .mockRejectedValueOnce(new Error('secret transport detail'));
     const provider = new GroqProvider('test-secret', state, request);
     const config = { ...defaultConfig, ai: { ...defaultConfig.ai, maxRetries: 0 } };
-    await expect(provider.complete(screen, config)).rejects.toThrow('Groq access failed');
-    await expect(provider.complete(screen, config)).rejects.toThrow('empty reply');
-    await expect(provider.complete(screen, config)).rejects.toThrow('unreadable response');
-    await expect(provider.complete(screen, config)).rejects.toThrow('could not be reached');
+    await expect(provider.complete(plain, config)).rejects.toThrow('Groq access failed');
+    await expect(provider.complete(plain, config)).rejects.toThrow('empty reply');
+    await expect(provider.complete(plain, config)).rejects.toThrow('unreadable response');
+    await expect(provider.complete(plain, config)).rejects.toThrow('could not be reached');
   });
 
   it('retries failed generations and logs Groq’s reason without exposing it to users', async () => {
@@ -135,15 +140,15 @@ describe('Groq transport', () => {
         ),
       );
     const provider = new GroqProvider('test-secret', state, request);
-    expect(await provider.complete(verify, defaultConfig)).toBe('Recovered');
-    const generation = await provider.complete(verify, defaultConfig).catch((e: unknown) => e);
+    expect((await provider.complete(searching, defaultConfig)).text).toBe('Recovered');
+    const generation = await provider.complete(searching, defaultConfig).catch((e: unknown) => e);
     expect(errorDetails(generation)).toEqual({
       kind: 'ProviderError',
       reason: "Groq's model openai/gpt-oss-120b failed to produce a usable reply. Try again.",
       detail: 'HTTP 400: tool_use_failed: Failed to call a function. Please adjust your prompt.',
     });
     expect(publicError(generation)).not.toContain('Failed to call');
-    const rejected = await provider.complete(verify, defaultConfig).catch((e: unknown) => e);
+    const rejected = await provider.complete(searching, defaultConfig).catch((e: unknown) => e);
     expect(errorDetails(rejected).detail).toBe(
       'HTTP 400: model_not_found: model `x` does not support browser_search',
     );

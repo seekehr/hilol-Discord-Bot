@@ -14,12 +14,24 @@ export interface CompletionRequest {
   // Groq's server-side web search. Search results add input tokens, so reserve extra.
   webSearch?: { extraTokens: number };
   json?: boolean;
-  // false keeps this request off the backup provider (whose free quota is small).
-  fallback?: boolean;
+}
+
+/** A reply plus who produced it, for logs. */
+export interface Completion {
+  text: string;
+  provider: 'groq' | 'openrouter';
+  /** The model that actually answered (OpenRouter's router reports its pick). */
+  model: string;
+  /** Tokens the provider reported, when it did. */
+  tokens?: number;
 }
 
 export interface Completer {
-  complete(request: CompletionRequest, config: BotConfig, signal?: AbortSignal): Promise<string>;
+  complete(
+    request: CompletionRequest,
+    config: BotConfig,
+    signal?: AbortSignal,
+  ): Promise<Completion>;
 }
 
 export function retryAfterMilliseconds(value: string | null, now = Date.now()): number {
@@ -74,7 +86,7 @@ export class GroqProvider implements Completer {
     { pool, model, messages, maxOutputTokens, webSearch, json }: CompletionRequest,
     config: BotConfig,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<Completion> {
     const reservedTokens =
       estimateRequestTokens(messages, model, maxOutputTokens) + (webSearch?.extraTokens ?? 0);
     const { maxRetries, timeoutMs } = config.ai;
@@ -158,7 +170,12 @@ export class GroqProvider implements Completer {
         ?.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || !content.trim())
         throw new UserError('Groq returned an empty reply. Consider raising the output budget.');
-      return content.trim();
+      return {
+        text: content.trim(),
+        provider: 'groq',
+        model,
+        ...(actualTokens !== undefined ? { tokens: actualTokens } : {}),
+      };
     }
     throw new UserError('Groq request failed.');
   }

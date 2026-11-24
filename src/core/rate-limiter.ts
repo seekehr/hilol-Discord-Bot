@@ -1,4 +1,4 @@
-// Stops one user from consuming the shared screening budget by flooding a channel.
+// Stops one user from draining the shared API budget by pinging the bot repeatedly.
 export class UserRateLimiter {
   private readonly users = new Map<string, number[]>();
   constructor(private readonly now = Date.now) {}

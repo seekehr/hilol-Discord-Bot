@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { RateLimitError } from '../core/rate-limit-error.js';
 import type { BotConfig, BudgetPool } from '../config/schema.js';
 
-const pools = ['screen', 'verify'] as const satisfies readonly BudgetPool[];
+const pools = ['model', 'fallbackModel'] as const satisfies readonly BudgetPool[];
 const poolSchema = z.enum(pools);
 const ignoresSchema = z.record(z.string().regex(/^\d{17,20}$/), z.number().finite().nonnegative());
 const reservationSchema = z.strictObject({
@@ -14,10 +14,18 @@ const reservationSchema = z.strictObject({
   tokens: z.number().int().nonnegative(),
 });
 const stateSchema = z.strictObject({
-  version: z.literal(2),
+  version: z.literal(3),
   ignores: ignoresSchema,
   reservations: z.array(reservationSchema),
   providerBlockedUntil: z.record(poolSchema, z.number().finite().nonnegative()),
+});
+// State from the automatic-scanning version, whose budgets were named after its stages.
+const oldPools = { verify: 'model', screen: 'fallbackModel' } as const;
+const scanningSchema = z.strictObject({
+  version: z.literal(2),
+  ignores: ignoresSchema,
+  reservations: z.array(reservationSchema.extend({ pool: z.enum(['screen', 'verify']) })),
+  providerBlockedUntil: z.record(z.enum(['screen', 'verify']), z.number().finite().nonnegative()),
 });
 // State written by the former chatbot: one shared budget and no pools.
 const legacySchema = z.strictObject({
@@ -31,26 +39,40 @@ type Budget = BotConfig['rateLimits'][BudgetPool];
 const day = 86_400_000;
 
 function parseState(value: unknown): State {
+  const scanning = scanningSchema.safeParse(value);
+  if (scanning.success)
+    return {
+      version: 3,
+      ignores: scanning.data.ignores,
+      reservations: scanning.data.reservations.map((entry) => ({
+        ...entry,
+        pool: oldPools[entry.pool],
+      })),
+      providerBlockedUntil: {
+        model: scanning.data.providerBlockedUntil.verify,
+        fallbackModel: scanning.data.providerBlockedUntil.screen,
+      },
+    };
   const legacy = legacySchema.safeParse(value);
   if (!legacy.success) return stateSchema.parse(value);
-  // The chatbot used the same model the screening stage now uses by default.
+  // The chatbot used the same model that is now the fallback model by default.
   return {
-    version: 2,
+    version: 3,
     ignores: legacy.data.ignores,
-    reservations: legacy.data.reservations.map((entry) => ({ ...entry, pool: 'screen' })),
+    reservations: legacy.data.reservations.map((entry) => ({ ...entry, pool: 'fallbackModel' })),
     providerBlockedUntil: {
-      screen: legacy.data.providerBlockedUntil,
-      verify: legacy.data.providerBlockedUntil,
+      model: legacy.data.providerBlockedUntil,
+      fallbackModel: legacy.data.providerBlockedUntil,
     },
   };
 }
 
 export class StateStore {
   private state: State = {
-    version: 2,
+    version: 3,
     ignores: {},
     reservations: [],
-    providerBlockedUntil: { screen: 0, verify: 0 },
+    providerBlockedUntil: { model: 0, fallbackModel: 0 },
   };
   private readonly queue = new SerialQueue();
 
