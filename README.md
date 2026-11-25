@@ -108,11 +108,11 @@ The included [deployment workflow](.github/workflows/deploy.yml) deploys every p
 
 3. **Authorize GitHub:** create a dedicated passphrase-free Ed25519 SSH key, add its **public** key to the Oracle `ubuntu` user's `~/.ssh/authorized_keys`, and set these repository [Actions secrets](../../settings/secrets/actions):
 
-   | Secret | Value |
-   | --- | --- |
-   | `SSH_HOST` | Oracle public IP or hostname |
-   | `SSH_USER` | `ubuntu` |
-   | `SSH_PRIVATE_KEY` | Complete **private** deployment key, including header/footer |
+   | Secret            | Value                                                          |
+   | ----------------- | -------------------------------------------------------------- |
+   | `SSH_HOST`        | Oracle public IP or hostname                                   |
+   | `SSH_USER`        | `ubuntu`                                                       |
+   | `SSH_PRIVATE_KEY` | Complete **private** deployment key, including header/footer   |
    | `SSH_KNOWN_HOSTS` | Verified server SSH host-key entry (not the fingerprint alone) |
 
    Obtain the host-key entry from the trusted Oracle console, replacing `YOUR_IP` with `SSH_HOST`:
