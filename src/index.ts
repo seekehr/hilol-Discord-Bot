@@ -32,9 +32,10 @@ async function main(): Promise<void> {
     sweepers: { messages: { interval: 300, lifetime: 3_600 } },
   });
   const groq = new GroqProvider(env.GROQ_API_KEY, state);
-  const ai = env.OPENROUTER_API_KEY
-    ? new FallbackCompleter(groq, new OpenRouterProvider(env.OPENROUTER_API_KEY), logger)
-    : groq;
+  const openRouter = env.OPENROUTER_API_KEY
+    ? new OpenRouterProvider(env.OPENROUTER_API_KEY)
+    : undefined;
+  const ai = openRouter ? new FallbackCompleter(groq, openRouter, logger) : groq;
   const factCheck = new FactCheckService(env.DISCORD_GUILD_ID, config, state, ai, logger);
   let stopping = false;
   const stop = () => {
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
     factCheck,
     logger,
     stop,
+    openRouter,
   );
   client.on(Events.MessageCreate, (message) => factCheck.handle(message));
   client.on(Events.InteractionCreate, (interaction) => {

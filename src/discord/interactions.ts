@@ -3,6 +3,8 @@ import { createRequire } from 'node:module';
 import type { ConfigStore } from '../config/store.js';
 import type { StateStore } from '../storage/state-store.js';
 import type { FactCheckService } from '../factcheck/service.js';
+import type { OpenRouterProvider } from '../ai/openrouter.js';
+import type { BotConfig } from '../config/schema.js';
 import type { Logger } from 'pino';
 import { parseDuration } from '../core/time.js';
 import { UserError, publicError, errorDetails } from '../core/errors.js';
@@ -33,7 +35,28 @@ export class InteractionService {
     private readonly factCheck: FactCheckService,
     private readonly logger: Logger,
     private readonly shutdown: () => void,
+    private readonly openRouter?: OpenRouterProvider,
   ) {}
+
+  /** One /status line for the OpenRouter backup: local 24h count plus key limits. */
+  private async openRouterStatus(config: BotConfig): Promise<string> {
+    const { enabled, model, webSearchResults } = config.ai.openRouter;
+    const label = `OpenRouter backup (${model})`;
+    if (!this.openRouter) return `${label}: off (no OPENROUTER_API_KEY)`;
+    if (!enabled) return `${label}: disabled in config`;
+    const usage = this.openRouter.usage();
+    const account = await this.openRouter.account();
+    const cap = account ? `/${account.freeModelRequestsPerDay}` : '';
+    const cooldown =
+      usage.blockedUntil > Date.now()
+        ? `, cooldown ends <t:${Math.ceil(usage.blockedUntil / 1_000)}:R>`
+        : '';
+    const search = webSearchResults > 0 ? `, search ${webSearchResults} results` : ', no search';
+    const credits = account
+      ? `, ${account.freeTier ? 'free tier' : 'paid tier'}, credits $${account.creditsUsedToday.toFixed(2)} today / $${account.creditsUsed.toFixed(2)} total${account.creditLimit !== null ? ` of $${account.creditLimit.toFixed(2)}` : ''}`
+      : ', key info unavailable';
+    return `${label} (24h, since restart): ${usage.requests}${cap} requests, ${usage.tokens} tokens${cooldown}${search}${credits}`;
+  }
 
   async handle(interaction: Interaction): Promise<void> {
     if (!interaction.isChatInputCommand()) return;
@@ -101,8 +124,9 @@ export class InteractionService {
                 : '';
             return `${usage.requests}/${limits.requestsPerDay} requests, ${usage.reservedTokens}/${limits.tokensPerDay} tokens${blocked}`;
           };
+          const openRouterLine = await this.openRouterStatus(config);
           await interaction.editReply({
-            content: `Replies: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.answered} mentions answered (${stats.unsearched} without search), ${stats.failed} failed\nMain model budget (24h, ${config.ai.model}): ${budget('model')}\nFallback model budget (24h, ${config.ai.fallbackModel}): ${budget('fallbackModel')}\nActive ignores: ${this.state.activeIgnores()}`,
+            content: `Replies: ${config.enabled ? 'enabled' : 'paused'}\nGateway latency: ${this.client.ws.ping}ms\nSince start: ${stats.answered} mentions answered (${stats.searched} searched, ${stats.unsearched} on the no-search fallback), ${stats.failed} failed\nMain model budget (24h, ${config.ai.model}): ${budget('model')}\nFallback model budget (24h, ${config.ai.fallbackModel}): ${budget('fallbackModel')}\n${openRouterLine}\nActive ignores: ${this.state.activeIgnores()}`,
             allowedMentions: { parse: [] },
           });
           return;

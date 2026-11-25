@@ -26,6 +26,43 @@ const withSearch = (results: number): BotConfig => ({
   },
 });
 
+describe('OpenRouter usage for /status', () => {
+  it('counts answered requests and tokens for 24 hours', async () => {
+    let now = 1_000_000;
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json({ choices: [{ message: { content: 'ok' } }], usage: { total_tokens: 900 } }),
+      );
+    const provider = new OpenRouterProvider('test-secret', request, () => now);
+    await provider.complete(plain, defaultConfig);
+    request.mockResolvedValueOnce(new Response('{}', { status: 429 }));
+    await expect(provider.complete(plain, defaultConfig)).rejects.toBeInstanceOf(RateLimitError);
+    expect(provider.usage()).toMatchObject({ requests: 1, tokens: 900 });
+    now += 86_400_001;
+    expect(provider.usage()).toMatchObject({ requests: 0, tokens: 0 });
+  });
+
+  it('reads the key tier and credits, or nothing when the key endpoint fails', async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      Response.json({
+        data: { is_free_tier: false, usage: 1.5, usage_daily: 0.25, limit: null },
+      }),
+    );
+    const provider = new OpenRouterProvider('test-secret', request);
+    expect(await provider.account()).toEqual({
+      freeTier: false,
+      freeModelRequestsPerDay: 1_000,
+      creditsUsed: 1.5,
+      creditsUsedToday: 0.25,
+      creditLimit: null,
+    });
+    expect(request.mock.calls[0]![0]).toBe('https://openrouter.ai/api/v1/key');
+    request.mockResolvedValueOnce(new Response('nope', { status: 401 }));
+    expect(await provider.account()).toBeUndefined();
+  });
+});
+
 describe('OpenRouter transport', () => {
   it('sends the same prompt to the free router without web search by default', async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(reply(' 680 CE. '));

@@ -197,8 +197,30 @@ describe('mention replies', () => {
     service.stop();
   });
 
+  it('answers from memory on the main model without offering search when it can', async () => {
+    const { service, complete } = await setup(
+      () =>
+        'It asks whether an omnipotent being can make a stone it cannot lift.\n<https://example.com/x>',
+    );
+    const ping = mentionMessage('<@999999999999999999> what is omnipotence paradox');
+    service.handle(ping.message);
+    await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
+    expect(complete).toHaveBeenCalledTimes(1);
+    const sent = complete.mock.calls[0]![0];
+    expect(sent).toMatchObject({ pool: 'model', model: 'openai/gpt-oss-120b' });
+    expect(sent.webSearch).toBeUndefined();
+    expect(sent.messages[0]!.content).toContain('reply with exactly SEARCH');
+    expect(ping.reply.mock.calls[0]![0].content).toBe(
+      'It asks whether an omnipotent being can make a stone it cannot lift.',
+    );
+    expect(service.stats).toEqual({ answered: 1, searched: 0, unsearched: 0, failed: 0 });
+    service.stop();
+  });
+
   it('fact-checks the replied-to message with web search on the main model', async () => {
-    const { service, complete, info } = await setup(() => 'Yes, that is accurate (Qur’an 5:55).');
+    const { service, complete, info } = await setup((request) =>
+      request.webSearch ? 'Yes, that is accurate (Qur’an 5:55).' : 'SEARCH',
+    );
     const target = fakeMessage('Verse 5:55 is about wilayah');
     const ping = mentionMessage('<@999999999999999999> yo', {
       reference: { messageId: target.message.id },
@@ -206,7 +228,8 @@ describe('mention replies', () => {
     });
     service.handle(ping.message);
     await vi.waitFor(() => expect(ping.reply).toHaveBeenCalledTimes(1));
-    const sent = complete.mock.calls[0]![0];
+    expect(complete).toHaveBeenCalledTimes(2);
+    const sent = complete.mock.calls[1]![0];
     expect(sent).toMatchObject({
       pool: 'model',
       model: 'openai/gpt-oss-120b',
@@ -218,7 +241,7 @@ describe('mention replies', () => {
       content: 'Yes, that is accurate (Qur’an 5:55).',
       allowedMentions: { parse: [], repliedUser: false },
     });
-    expect(service.stats).toEqual({ answered: 1, unsearched: 0, failed: 0 });
+    expect(service.stats).toEqual({ answered: 1, searched: 1, unsearched: 0, failed: 0 });
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'groq', model: 'openai/gpt-oss-120b' }),
       'Answered mention',
@@ -258,7 +281,7 @@ describe('mention replies', () => {
     expect(fallback.webSearch).toBeUndefined();
     expect(fallback.messages[0]!.content).toContain('no web access');
     expect(ping.reply.mock.calls[0]![0].content).toBe(`${NO_SEARCH_NOTE}Karbala was in 680 CE.`);
-    expect(service.stats).toEqual({ answered: 1, unsearched: 1, failed: 0 });
+    expect(service.stats).toEqual({ answered: 1, searched: 0, unsearched: 1, failed: 0 });
     service.stop();
   });
 

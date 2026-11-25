@@ -9,6 +9,7 @@ import { RateLimitError } from '../core/rate-limit-error.js';
 import { errorDetails } from '../core/errors.js';
 import {
   mentionPrompt,
+  SEARCH_SIGNAL,
   spoken,
   withCitations,
   type ChannelInfo,
@@ -48,7 +49,7 @@ export class FactCheckService {
   private stopped = false;
   private controller = new AbortController();
   private readonly limiter: UserRateLimiter;
-  readonly stats = { answered: 0, unsearched: 0, failed: 0 };
+  readonly stats = { answered: 0, searched: 0, unsearched: 0, failed: 0 };
 
   constructor(
     private readonly guildId: string,
@@ -95,7 +96,8 @@ export class FactCheckService {
         : undefined;
       const guidelines = await this.config.readPrompt();
       const context = await this.context(message, config.replies.contextMessages);
-      const ask = (webSearch: boolean) =>
+      // 'ask' and true run on the main model; false is the no-search fallback model.
+      const ask = (webSearch: boolean | 'ask') =>
         this.ai.complete(
           {
             // Each model has its own Groq budget, so the fallback still works when the
@@ -114,7 +116,9 @@ export class FactCheckService {
               links,
             ),
             maxOutputTokens: config.ai.maxOutputTokens,
-            ...(webSearch ? { webSearch: { extraTokens: config.ai.searchTokenAllowance } } : {}),
+            ...(webSearch === true
+              ? { webSearch: { extraTokens: config.ai.searchTokenAllowance } }
+              : {}),
           },
           config,
           signal,
@@ -129,8 +133,27 @@ export class FactCheckService {
       let answer: Completion;
       let text: string;
       try {
-        answer = await ask(config.ai.webSearch);
-        text = post(answer.text, config.ai.webSearch);
+        if (!config.ai.webSearch) {
+          answer = await ask(false);
+          text = post(answer.text, false);
+        } else {
+          // Browsing costs tens of thousands of tokens and Groq cannot cap it, so the
+          // main model first answers without tools and searches only if it asks to.
+          answer = await ask('ask');
+          if (
+            answer.text
+              .trim()
+              .replace(/[*_`.]/g, '')
+              .toUpperCase() === SEARCH_SIGNAL
+          ) {
+            answer = await ask(true);
+            text = post(answer.text, true);
+            this.stats.searched++;
+          } else {
+            // Links written without a search come from memory, so they are dropped.
+            text = links ? withCitations(answer.text, [], false) : spoken(answer.text);
+          }
+        }
       } catch (error) {
         // Search failed (usually budget): answer without search on the fallback model,
         // then OpenRouter, rather than refusing. Links are dropped because without search

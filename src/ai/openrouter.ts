@@ -9,6 +9,19 @@ import {
 } from './groq.js';
 
 const endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+const keyEndpoint = 'https://openrouter.ai/api/v1/key';
+const day = 86_400_000;
+
+/** What OpenRouter reports about the API key, for /status. */
+export interface OpenRouterAccount {
+  freeTier: boolean;
+  /** Requests per day allowed on `:free` models: 50 on the free tier, else 1000. */
+  freeModelRequestsPerDay: number;
+  creditsUsed: number;
+  creditsUsedToday: number;
+  /** Null when the key has no credit limit. */
+  creditLimit: number | null;
+}
 
 /** When OpenRouter says the limit resets: Retry-After, else X-RateLimit-Reset (epoch ms). */
 function resetMilliseconds(headers: Headers, now: number): number {
@@ -27,6 +40,8 @@ function resetMilliseconds(headers: Headers, now: number): number {
  */
 export class OpenRouterProvider implements Completer {
   private blockedUntil = 0;
+  // Requests OpenRouter answered, kept for 24h. In memory, so a restart clears it.
+  private calls: { at: number; tokens: number }[] = [];
 
   constructor(
     private readonly apiKey: string,
@@ -37,6 +52,44 @@ export class OpenRouterProvider implements Completer {
   /** Whether this provider can stand in for a request that wants web search. */
   static searches(config: BotConfig): boolean {
     return config.ai.openRouter.webSearchResults > 0;
+  }
+
+  /** Local count of the last 24h (since restart at most), for /status. */
+  usage(): { requests: number; tokens: number; blockedUntil: number } {
+    const since = this.now() - day;
+    this.calls = this.calls.filter((call) => call.at > since);
+    return {
+      requests: this.calls.length,
+      tokens: this.calls.reduce((sum, call) => sum + call.tokens, 0),
+      blockedUntil: this.blockedUntil,
+    };
+  }
+
+  /** Key limits and credit use from OpenRouter, or undefined if it cannot be read. */
+  async account(timeoutMs = 3_000): Promise<OpenRouterAccount | undefined> {
+    try {
+      const response = await this.request(keyEndpoint, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        return undefined;
+      }
+      const data = ((await response.json()) as { data?: Record<string, unknown> } | null)?.data;
+      if (!data) return undefined;
+      const number = (value: unknown) => (typeof value === 'number' ? value : 0);
+      const freeTier = data.is_free_tier !== false;
+      return {
+        freeTier,
+        freeModelRequestsPerDay: freeTier ? 50 : 1_000,
+        creditsUsed: number(data.usage),
+        creditsUsedToday: number(data.usage_daily),
+        creditLimit: typeof data.limit === 'number' ? data.limit : null,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   async complete(
@@ -77,6 +130,8 @@ export class OpenRouterProvider implements Completer {
       this.blockedUntil = Math.max(this.blockedUntil, this.now() + wait);
       throw new RateLimitError('provider', wait / 1_000, 'cooldown');
     }
+    const call = { at: this.now(), tokens: 0 };
+    this.calls.push(call);
     if (!response.ok) {
       const detail = (await response.text().catch(() => ''))
         .replace(/\s+/g, ' ')
@@ -108,6 +163,7 @@ export class OpenRouterProvider implements Completer {
     if (typeof content !== 'string' || !content.trim())
       throw new UserError('OpenRouter returned an empty reply.');
     const tokens = reply?.usage?.total_tokens;
+    if (typeof tokens === 'number') call.tokens = tokens;
     return {
       text: content.trim(),
       provider: 'openrouter',
